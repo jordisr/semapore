@@ -72,3 +72,11 @@ def get_pileup_alignment(alignment, reference):
                 alignment_columns.append(insertion_col)
 
     return pd.DataFrame(alignment_columns).fillna(no_marker)
+
+def replace_tuple(x):
+    char_encoding = {v:i for i,v in enumerate(['<NONE>','<DEL>','<INS>','A','C','G','T','a','c','g','t'])}
+
+    if type(x) is str:
+        return (-1, char_encoding[x])
+    else:
+        return (x[0], char_encoding[x[1]])
