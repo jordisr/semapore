@@ -3,7 +3,7 @@ from scipy.stats import norm
 
 from .pileup import replace_tuple
 
-def featurize_inputs(pileup, reads=False, window_size=100, max_time=100):
+def featurize_inputs(pileup, reads, window_size=100, max_time=150):
     """
     Generate padded input features from the raw signal and reads-to-assembly alignment
 
@@ -19,6 +19,7 @@ def featurize_inputs(pileup, reads=False, window_size=100, max_time=100):
 
     num_columns = pileup.shape[0]
     num_reads = pileup.shape[1]
+    read_names = list(pileup.columns) # including draft here
 
     # more efficient to specify shapes ahead of time instead of padding
     # using 100 as default upper bound for number of signals/base
@@ -46,26 +47,28 @@ def featurize_inputs(pileup, reads=False, window_size=100, max_time=100):
             sequence_cols.append(alignment_column)
             alignment_idx = np.array([x[0] for x in pileup_window[i]])
 
-            for j in range(num_reads):
+            for j, read_id in enumerate(read_names):
                 if alignment_column[j] > 2: # A,C,G,T,a,c,g,t
 
                     # alignment index => basecall sequence index
                     basecall_idx = alignment_idx[j]
 
                     # basecall sequence index => signal event bounds
-                    # event_bounds = reads[j]["segments"][basecall_idx]
+                    event_bounds = reads[read_id]["segments"][basecall_idx]
 
                     # signal event bounds => raw signal
+                    this_signal = reads[read_id]["signal"][event_bounds[0]:event_bounds[1]]
+                    num_signals = this_signal.shape[0]
                     # this is a placeholder for querying FAST5 file
-                    num_signals = int(norm.rvs(9,2))
-                    this_signal = np.random.random(num_signals)
+                    #num_signals = int(norm.rvs(9,2))
+                    #this_signal = np.random.random(num_signals)
 
                     signal_data[col_i, i, j, :num_signals] = this_signal[:max_time]
                     signal_mask[col_i, i, j, :num_signals] = True
 
                     if num_signals > max_time:
                         # TODO log warning
-                        print("Warning")
+                        print("Warning!", "Event size:{} Max event size:{}".format(num_signals, max_time))
                     elif num_signals > max_signals:
                         max_signals = num_signals
 

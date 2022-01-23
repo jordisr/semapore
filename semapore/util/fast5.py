@@ -3,6 +3,25 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
+def get_reads(read_ids, base_dir):
+    """Load basecalled FAST5 reads
+
+    Arguments:
+    read_ids -- list of read ids/filenames
+    base_dir -- directory to look in for reads
+
+    Returns:
+    dict of dicts
+    """
+    # naive version with all FAST5 files in single base dir
+    # will want to make more flexible to look in numbered subfolders e.g. folder/0, folder/1...
+    reads = {}
+    for r in read_ids: # skip first since it's the draft
+        fast5_path = "{}/{}.fast5".format(base_dir, r.split("_")[0])
+        read_id, signal, segments, sequence = parse_guppy_fast5(fast5_path, scaling="standard")
+        reads[r] = {'id':read_id, 'signal':signal, 'segments':segments, 'sequence':sequence}
+    return reads
+
 def plot_signal_segments(signal, segments, sequence=None, alternating_colors = ['#EE1F60', '#00B0DA'], base_colors={'A':'#EE1F60','C':'#00B0DA', 'G':'#FDB515', 'T':'#00A598'}, label_bases=False, overlap=False, color_by_base=False):
 
     if (label_bases or color_by_base) and sequence is None:
