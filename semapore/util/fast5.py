@@ -4,17 +4,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def get_reads(read_ids, base_dir):
-    """Load basecalled FAST5 reads
+    """Load basecalled FAST5 files
 
-    Arguments:
-    read_ids -- list of read ids/filenames
-    base_dir -- directory to look in for reads
+    Args:
+        read_ids (list): read filenames
+        base_dir (str): directory to look in for reads
 
     Returns:
-    dict of dicts
+        dict: reads, nested dict with read ids as keys
     """
     # naive version with all FAST5 files in single base dir
-    # will want to make more flexible to look in numbered subfolders e.g. folder/0, folder/1...
+    # TODO: flexible look in numbered subfolders e.g. folder/0, folder/1
     reads = {}
     for r in read_ids: # skip first since it's the draft
         fast5_path = "{}/{}.fast5".format(base_dir, r.split("_")[0])
@@ -58,10 +58,9 @@ def plot_signal_segments(signal, segments, sequence=None, alternating_colors = [
     return fig, ax
 
 def parse_guppy_fast5(f, scaling=None):
+    """Extract signal, sequence, and segmentation from a basecalled FAST5
     """
-    Extract raw signal, sequence, and segmentation from a FAST5 read basecalled by Guppy
-    """
-    # TODO support multi-fast5
+    # TODO: support multi-fast5
 
     hdf = h5py.File(f,'r')
 

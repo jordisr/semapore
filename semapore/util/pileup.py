@@ -13,10 +13,14 @@ def load_fastx(f, fmt="fasta"):
     return seqs
 
 def get_pileup_alignment(alignment, reference):
-    """
-    Generate pileup alignment table of reads aligned to the reference / draft assembly.
+    """Generate pileup alignment of reads aligned to the draft assembly/reference
 
-    Takes alignment file in BAM and reference in FASTA format.
+    Args:
+        alignment (str): path to BAM alignment
+        reference (str): path to draft assembly/reference in FASTA format
+
+    Returns:
+        DataFrame: one column for each sequence in alignment, one row for each position
     """
 
     (ref_id, ref_seq) = load_fastx(reference, "fasta")[0]

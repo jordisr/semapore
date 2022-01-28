@@ -28,9 +28,9 @@ def get_sequence_offset(full_seq, sub_seq):
 def trim_raw_reads(reads, path_to_trimmed):
     """Apply sequence offsets to FAST5 segmentation/sequence data (in place)
 
-    Arguments:
-    reads -- dict of dicts returned by get_reads()
-    path_to_trimmed -- path to FASTA file of trimmed reads
+    Args:
+        reads (dict): dict of dicts returned by get_reads()
+        path_to_trimmed (str): path to FASTA file of trimmed reads
     """
     trimmed_reads = load_fastx(path_to_trimmed, "fasta")
     read_offsets = {}

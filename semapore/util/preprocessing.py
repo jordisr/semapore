@@ -3,31 +3,35 @@ from scipy.stats import norm
 
 from .pileup import replace_tuple
 
-def featurize_inputs(pileup, reads, window_size=100, max_time=150):
-    """
-    Generate padded input features from the raw signal and reads-to-assembly alignment
+def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=False):
+    """Generate padded input features from the raw signal and reads-to-assembly alignment
 
-    Inputs:
-        pileup       output of get_pileup_alignment()
-        reads        output of get_fast5_reads()
+    Args:
+        pileup (DataFrame): output of get_pileup_alignment()
+        reads (dict): output of get_fast5_reads()
+        window_size (int): number of pileup alignment columns per input
+        max_time (int): max signal/event size, larger ones will be truncated
+        trim_down (bool): whether to reduce signal array if all events < max_time
 
-    Outputs:
-        alignment    [?, window_size, num_reads]
-        signal       [?, window_size, num_reads, max_time]
-        signal_masks [?, window_size, num_reads, max_time]
+    Returns:
+        ndarray: alignment
+            [?, window_size, num_reads]
+        ndarray: signal
+            [?, window_size, num_reads, max_time]
+        ndarray: signal_masks
+            [?, window_size, num_reads, max_time]
     """
 
     num_columns = pileup.shape[0]
     num_reads = pileup.shape[1]
-    read_names = list(pileup.columns) # including draft here
+    read_names = list(pileup.columns)
 
-    # more efficient to specify shapes ahead of time instead of padding
-    # using 100 as default upper bound for number of signals/base
-    # TODO dynamically resize if it exceeds
-    # TODO add in padding for last incomplete batch
+    # TODO: dynamically resize if it exceeds?
+    # TODO: add in padding for last incomplete batch
     # num_reads is total number of reads, possibly impractical for large assemblies
     signal_data = np.zeros((num_columns // window_size, window_size, num_reads, max_time), dtype=np.float32)
     signal_mask = np.zeros((num_columns // window_size, window_size, num_reads, max_time), dtype=bool)
+    window_bounds = np.zeros((num_columns // window_size, 2), dtype=np.int32)
     sequence_data = []
 
     # same padding across all windows, saves hassle of nested RaggedTensor
@@ -35,6 +39,9 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150):
 
     col = 0
     col_i = 0
+
+    num_signals_processed = 0
+    num_over_maxtime = 0
     while col+window_size < num_columns:
         sequence_cols = []
 
@@ -66,18 +73,24 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150):
                     signal_data[col_i, i, j, :num_signals] = this_signal[:max_time]
                     signal_mask[col_i, i, j, :num_signals] = True
 
+                    num_signals_processed += 1
                     if num_signals > max_time:
-                        # TODO log warning
-                        print("Warning!", "Event size:{} Max event size:{}".format(num_signals, max_time))
+                        # track truncated events
+                        num_over_maxtime += 1
                     elif num_signals > max_signals:
                         max_signals = num_signals
 
                 else:
                     this_signal = []
 
+        window_bounds[col_i] = np.array([col, col+window_size])
         col += window_size
         col_i += 1
 
         sequence_data.append(sequence_cols)
 
-    return np.array(sequence_data), signal_data[:,:,:,:max_signals], signal_mask[:,:,:,:max_signals]
+    if not trim_down:
+        max_signals = max_time
+
+    print("{}% events truncated (max_time={})".format(format(num_over_maxtime/num_signals_processed*100, ".2f"), max_time))
+    return np.array(sequence_data), signal_data[:,:,:,:max_signals], signal_mask[:,:,:,:max_signals], window_bounds
