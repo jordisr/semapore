@@ -20,6 +20,8 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
             [?, window_size, num_reads, max_time]
         ndarray: signal_masks
             [?, window_size, num_reads, max_time]
+        ndarray: window_bounds
+            [?, 2]
     """
 
     num_columns = pileup.shape[0]
@@ -92,5 +94,5 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
     if not trim_down:
         max_signals = max_time
 
-    print("{}% events truncated (max_time={})".format(format(num_over_maxtime/num_signals_processed*100, ".2f"), max_time))
+    #print("{}% events truncated (max_time={})".format(format(num_over_maxtime/num_signals_processed*100, ".2f"), max_time))
     return np.array(sequence_data), signal_data[:,:,:,:max_signals], signal_mask[:,:,:,:max_signals], window_bounds
