@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import numpy as np
 import mappy as mp
@@ -70,9 +71,10 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
         aligner (mappy.Aligner): aligner to reference genome
 
     Returns:
+        ndarray: draft_window_sequences, draft sequence strings
         ndarray: ref_window_sequences, ref sequence strings
         ndarray: ref_window_idx, positions with valid ref seq output
-        ndarray: ref_window_same, bool array of whether draft matches ref
+        str: ref_name, reference sequence that draft aligend to
     """
 
     # extract draft sequence from parsed pileup
@@ -80,11 +82,13 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
 
     # get first hit from alignment(s) to reference
     hit = next(aligner.map(draft_sequence, cs=True))
+    ref_name = hit.ctg
 
     # get pairwise alignment coordinates
-    r_seq = aligner.seq(hit.ctg, start=hit.r_st, end=hit.r_en)
+    r_seq = aligner.seq(ref_name, start=hit.r_st, end=hit.r_en)
     [r2q, q2r] = get_alignment_coord(hit)
 
+    draft_window_sequences = []
     ref_window_sequences = []
     ref_window_idx = []
     ref_window_same = []
@@ -92,18 +96,23 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
     for window_idx, pileup_window in enumerate(window_bounds):
         draft_pileup_window = list(draft_pileup.loc[pileup_window[0]:pileup_window[1]])
 
-        # TODO: be explicit about behavior here
-        # go top down, find first non insert character
-        i = 0
-        while type(draft_pileup_window[i]) is not tuple:
-            i += 1
-        draft_start = draft_pileup_window[i][0]
+        try:
+            # TODO: be explicit about behavior here
+            # go top down, find first non insert character
+            i = 0
+            while type(draft_pileup_window[i]) is not tuple:
+                i += 1
+            draft_start = draft_pileup_window[i][0]
 
-        # go bottom up, find first non insert character
-        i = len(draft_pileup_window)-1
-        while type(draft_pileup_window[i]) is not tuple:
-            i -= 1
-        draft_end = draft_pileup_window[i][0]
+            # go bottom up, find first non insert character
+            i = len(draft_pileup_window)-1
+            while type(draft_pileup_window[i]) is not tuple:
+                i -= 1
+            draft_end = draft_pileup_window[i][0]
+        except IndexError:
+            # TODO: log these exceptions
+            # skip sections with all inserts for draft sequence
+            continue
 
         # check this chunk of draft contained in alignment to ref
         if draft_start >= hit.q_st and draft_end <= hit.q_en:
@@ -113,16 +122,17 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
             ref_window_idx.append(window_idx)
             ref_window_sequences.append(r_seq[ref_rel_start:ref_rel_end])
             ref_window_same.append(draft_sequence[draft_start:draft_end] == r_seq[ref_rel_start:ref_rel_end])
+            draft_window_sequences.append(draft_sequence[draft_start:draft_end])
 
-    return np.array(ref_window_sequences), np.array(ref_window_idx), np.array(ref_window_same)
+    return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), ref_name
 
-def make_training_data(draft, alignment, reads_dir, out="tmp", aligner=None, reference="", trimmed_reads="", window=100, max_time=80):
+def make_training_data(draft, alignment, reads, out="tmp", aligner=None, reference="", trimmed_reads="", window=100, max_time=80):
     """Write labeled training data for one draft sequence to NPZ
 
     Args:
         draft (str): path to draft assembly sequence in FASTA
         alignment (str): path to BAM alignment
-        reads_dir (str): path to directory of basecalled FAST5 reads
+        reads (str/dict): path to directory or dict {read_id:path}
         out (str): name to save file under
         aligner (mappy.Aligner): aligner to reference genome
         reference (str): path to reference genome FASTA (needed if aligner=None)
@@ -139,7 +149,12 @@ def make_training_data(draft, alignment, reads_dir, out="tmp", aligner=None, ref
     pileup_reads = list(pileup.columns)
 
     # load reads
-    reads = semapore.util.get_reads(pileup_reads, base_dir=reads_dir)
+    if type(reads) is str:
+        reads = semapore.util.get_reads(pileup_reads, dir=reads)
+    elif type(reads) is dict:
+        reads = semapore.util.get_reads(pileup_reads, paths=reads)
+    else:
+        sys.exit("No reads provided!")
 
     # load trimmed read sequences
     if trimmed_reads:
@@ -152,12 +167,12 @@ def make_training_data(draft, alignment, reads_dir, out="tmp", aligner=None, ref
     if reference and not aligner:
         aligner = mp.Aligner(reference, preset='map-ont')
 
-    ref_seqs, ref_windows, ref_same = get_reference_sequences(draft_pileup, window_bounds, aligner)
+    draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, aligner)
 
     sequence_input = sequence_input[ref_windows]
     signal_input = signal_input[ref_windows]
     signal_input_mask = signal_input_mask[ref_windows]
-    files = np.array([draft, alignment, reads_dir, reference, trimmed_reads])
+    files = np.array([draft, alignment, reference, trimmed_reads])
 
     outfile = "{}.npz".format(out)
     np.savez_compressed(outfile,
@@ -165,8 +180,9 @@ def make_training_data(draft, alignment, reads_dir, out="tmp", aligner=None, ref
         sequence_input=sequence_input,
         signal_input=signal_input,
         signal_mask=signal_input_mask,
-        ref_sequence=ref_seqs,
-        ref_same=ref_same)
+        ref_sequences=ref_sequences,
+        draft_sequences=draft_sequences,
+        ref_name=ref_name)
 
 def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80):
     """Make training NPZ files for nested directory of assemblies
@@ -175,7 +191,7 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
         pattern (str): wildcard pattern to be expanded for directory names
         alignment (str): path to BAM alignment
         draft (str): path to draft (FASTA)
-        reads (str): path to directory of basecalled FAST5 reads
+        reads (str/dict): directory or dict of read paths
         reference (str): path to reference genome FASTA
         trimmed_reads (str): path to trimmed reads (FASTA)
         out (str): name of output directory to create
@@ -187,15 +203,18 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
     aligner = mp.Aligner(reference, preset='map-ont')
 
     for f in glob.glob(pattern):
-        make_training_data(
-            out="{}/{}".format(out, os.path.basename(f)),
-            draft="{}/{}".format(f, draft),
-            alignment="{}/{}".format(f, alignment),
-            trimmed_reads="{}/{}".format(f, trimmed_reads),
-            reads_dir=reads,
-            aligner=aligner,
-            window=window,
-            max_time=max_time)
+        try:
+            make_training_data(
+                out="{}/{}".format(out, os.path.basename(f)),
+                draft="{}/{}".format(f, draft),
+                alignment="{}/{}".format(f, alignment),
+                trimmed_reads="{}/{}".format(f, trimmed_reads),
+                reads=reads,
+                aligner=aligner,
+                window=window,
+                max_time=max_time)
+        except:
+            pass
 
 def ragged_from_list_of_lists(l):
     return tf.RaggedTensor.from_row_lengths(np.concatenate(l), np.array([len(i) for i in l]))
@@ -209,13 +228,14 @@ def load_npz_data(f):
 def prepare_dataset(x, labels):
     x_ds = tuple([tf.data.Dataset.from_tensor_slices(x_) for x_ in x])
 
+    # what to do about N nucleotide? N > A
     labels_ds = tf.data.Dataset.from_tensor_slices(tf.cast(
-        ragged_from_list_of_lists([[{'A':0,'C':1,'G':2,'T':3}[i] for i in j] for j in labels]), np.int32))
+        ragged_from_list_of_lists([[{'A':0,'C':1,'G':2,'T':3, 'N':0}[i] for i in j] for j in labels]), np.int32))
 
     return tf.data.Dataset.zip((x_ds, labels_ds))
 
-def dataset_from_files(files):
-    """Merge and pad NPZ data and convert to tf.data.Dataset
+def dataset_from_files(files, ndarray_out=False):
+    """Merge and pad NPZ data and convert to tf.data.Dataset in memory
 
     Args:
         files (list): *.npz files created with make_training_dir()/make_training_data()
@@ -258,4 +278,7 @@ def dataset_from_files(files):
 
         labels = np.concatenate((labels, training_data['ref_sequence']))
 
-    return prepare_dataset(x, labels)
+    if ndarray_out:
+        return x, labels
+    else:
+        return prepare_dataset(x, labels)

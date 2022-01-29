@@ -1,23 +1,38 @@
 import sys
+import os
+import glob
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
-def get_reads(read_ids, base_dir):
+def find_nested_reads(dir):
+    # return lookup table of nested read paths
+    lookup_table = {}
+    for r in glob.glob("{}/*/*.fast5".format(dir)):
+        lookup_table[os.path.basename(r)] = r
+    return lookup_table
+
+def get_reads(read_ids, dir=None, paths=None):
     """Load basecalled FAST5 files
 
     Args:
         read_ids (list): read filenames
         base_dir (str): directory to look in for reads
+        paths (dict): table of read_id.fast5 => file_path
 
     Returns:
         dict: reads, nested dict with read ids as keys
     """
-    # naive version with all FAST5 files in single base dir
-    # TODO: flexible look in numbered subfolders e.g. folder/0, folder/1
     reads = {}
-    for r in read_ids: # skip first since it's the draft
-        fast5_path = "{}/{}.fast5".format(base_dir, r.split("_")[0])
+    for r in read_ids:
+        fast5_file = "{}.fast5".format(r.split("_")[0])
+        if paths:
+            fast5_path = paths[fast5_file]
+        elif dir:
+            fast5_path = os.path.join(dir, fast5_file)
+        else:
+            sys.exit("Must specify directory or dict of paths")
+        print(fast5_path)
         read_id, signal, segments, sequence = parse_guppy_fast5(fast5_path, scaling="standard")
         reads[r] = {'id':read_id, 'signal':signal, 'segments':segments, 'sequence':sequence}
     return reads
