@@ -282,3 +282,32 @@ def dataset_from_files(files, ndarray_out=False):
         return x, labels
     else:
         return prepare_dataset(x, labels)
+
+def generator_dataset_from_files(files):
+    """Create dataset from generator
+
+    Args:
+        files (list): *.npz files created with make_training_dir()/make_training_data()
+
+    Returns:
+        tf.data.Dataset: dataset of zipped inputs and labels
+    """
+
+    def npz_gen(files_):
+        for f in files_:
+            training_data = np.load(f)
+            x1 = training_data['signal_input'].astype(np.float32)
+            x2 = training_data['sequence_input'].astype(np.int32)
+            labels =  training_data['ref_sequence']
+            for d in zip(x1,x2,labels):
+                label =[{'A':0,'C':1,'G':2,'T':3}[i] for i in d[2]]
+                label = tf.cast(tf.RaggedTensor.from_row_lengths(label, row_lengths=[len(label)]), tf.int32)
+                yield ((d[0],d[1]), label)
+
+    ds = tf.data.Dataset.from_generator(npz_gen,
+                                         args=[files],
+                                        output_signature=((tf.TensorSpec(shape=(None,None,None), dtype=tf.float32),
+                                                            tf.TensorSpec(shape=(None,None), dtype=tf.int32)),
+                                                            tf.RaggedTensorSpec(shape=(1,None), dtype=tf.int32)))
+
+    return ds
