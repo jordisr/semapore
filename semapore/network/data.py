@@ -7,10 +7,9 @@ import tensorflow as tf
 
 import semapore.util
 
-def get_alignment_coord(hit):
+def get_alignment_coord(cs):
     """Parse CS string of mappy.Alignment
     """
-    cs = hit.cs
     operation = ""
     operation_field = ""
 
@@ -29,10 +28,10 @@ def get_alignment_coord(hit):
                     match_length = int(operation_field)
 
                     for j in range(match_length):
-                        coord_r += 1
-                        coord_q += 1
                         r2q.append(coord_q)
                         q2r.append(coord_r)
+                        coord_r += 1
+                        coord_q += 1
 
                 elif operation == "+":
                     # insertion with respect to the reference
@@ -86,15 +85,23 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
 
     # get pairwise alignment coordinates
     r_seq = aligner.seq(ref_name, start=hit.r_st, end=hit.r_en)
-    [r2q, q2r] = get_alignment_coord(hit)
+    [r2q, q2r] = get_alignment_coord(hit.cs)
+    if hit.strand < 0:
+        # reverse coordinates for reverse matches
+        r_seq = semapore.util.revcomp(r_seq)
+        r2q = max(r2q)-r2q[::-1]
+        q2r = max(q2r)-q2r[::-1]
+
+    print("Identity:{} Strand:{}".format(hit.mlen/hit.blen, hit.strand), file=sys.stderr)
 
     draft_window_sequences = []
     ref_window_sequences = []
     ref_window_idx = []
-    ref_window_same = []
+
+    window_size = window_bounds[0,1]-window_bounds[0,0]
 
     for window_idx, pileup_window in enumerate(window_bounds):
-        draft_pileup_window = list(draft_pileup.loc[pileup_window[0]:pileup_window[1]])
+        draft_pileup_window = list(draft_pileup.iloc[pileup_window[0]:pileup_window[1]])
 
         try:
             # TODO: be explicit about behavior here
@@ -116,15 +123,22 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
 
         # check this chunk of draft contained in alignment to ref
         if draft_start >= hit.q_st and draft_end <= hit.q_en:
-            ref_rel_start = q2r[draft_start-hit.q_st]-1
-            ref_rel_end = q2r[draft_end-hit.q_st]-1
+            ref_rel_start = q2r[draft_start-hit.q_st]
+            ref_rel_end = q2r[draft_end-hit.q_st]
 
-            ref_window_idx.append(window_idx)
-            ref_window_sequences.append(r_seq[ref_rel_start:ref_rel_end])
-            ref_window_same.append(draft_sequence[draft_start:draft_end] == r_seq[ref_rel_start:ref_rel_end])
-            draft_window_sequences.append(draft_sequence[draft_start:draft_end])
+            this_ref_seq = r_seq[ref_rel_start:ref_rel_end]
+            this_draft_seq = draft_sequence[draft_start:draft_end]
 
-    return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), ref_name
+            if len(this_ref_seq) > 0 and len(this_draft_seq) > 0 and ('N' not in this_ref_seq) and len(this_ref_seq) <= window_size:
+                ref_window_idx.append(window_idx)
+                ref_window_sequences.append(this_ref_seq)
+                draft_window_sequences.append(this_draft_seq)
+                print("{}\t{}..{}\t{}..{}".format(hit.strand, this_draft_seq[:10],this_draft_seq[-10:], this_ref_seq[:10],this_ref_seq[-10:]), file=sys.stderr)
+
+            else:
+                print("Warning: window {}, draft_len={} ref_len={}".format(window_idx, len(this_draft_seq), len(this_ref_seq)),  file=sys.stderr)
+
+    return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
 
 def make_training_data(draft, alignment, reads, out="tmp", aligner=None, reference="", trimmed_reads="", window=100, max_time=80):
     """Write labeled training data for one draft sequence to NPZ
@@ -167,6 +181,7 @@ def make_training_data(draft, alignment, reads, out="tmp", aligner=None, referen
     if reference and not aligner:
         aligner = mp.Aligner(reference, preset='map-ont')
 
+    print("Moving to draft: {}".format(draft), file=sys.stderr)
     draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, aligner)
 
     sequence_input = sequence_input[ref_windows]
@@ -174,7 +189,7 @@ def make_training_data(draft, alignment, reads, out="tmp", aligner=None, referen
     signal_input_mask = signal_input_mask[ref_windows]
     files = np.array([draft, alignment, reference, trimmed_reads])
 
-    outfile = "{}.npz".format(out)
+    outfile = "{}.all.npz".format(out)
     np.savez_compressed(outfile,
         files=files,
         sequence_input=sequence_input,
@@ -183,6 +198,24 @@ def make_training_data(draft, alignment, reads, out="tmp", aligner=None, referen
         ref_sequences=ref_sequences,
         draft_sequences=draft_sequences,
         ref_name=ref_name)
+
+    # save windows where draft and reference aren't identitcal
+    ref_is_diff =  ~(ref_sequences == draft_sequences)
+    if ref_is_diff.any():
+        sequence_input = sequence_input[ref_is_diff]
+        signal_input = signal_input[ref_is_diff]
+        signal_input_mask = signal_input_mask[ref_is_diff]
+        files = np.array([draft, alignment, reference, trimmed_reads])
+
+        outfile = "{}.errors.npz".format(out)
+        np.savez_compressed(outfile,
+            files=files,
+            sequence_input=sequence_input,
+            signal_input=signal_input,
+            signal_mask=signal_input_mask,
+            ref_sequences=ref_sequences,
+            draft_sequences=draft_sequences,
+            ref_name=ref_name)
 
 def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80):
     """Make training NPZ files for nested directory of assemblies
@@ -299,21 +332,26 @@ def generator_dataset_from_files(files):
 
             x1 = training_data['signal_input'].astype(np.float32)
             x2 = training_data['sequence_input'].astype(np.int32)
-            labels =  training_data['ref_sequence']
+            x3 = training_data['draft_sequences']
+            labels = training_data['ref_sequences']
 
-            for d in zip(x1,x2,labels):
+            for d in zip(x1,x2,x3,labels):
                 x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[0], axis=3), ragged_rank=2)
                 x2_ = tf.RaggedTensor.from_tensor(d[1])
+                x3_ = [{'A':0,'C':1,'G':2,'T':3}[i] for i in d[2]]
+                x3_ = tf.cast(tf.RaggedTensor.from_row_lengths(x3_, row_lengths=[len(x3_)]), tf.int32)
 
-                label =[{'A':0,'C':1,'G':2,'T':3}[i] for i in d[2]]
+                label =[{'A':0,'C':1,'G':2,'T':3}[i] for i in d[-1]]
                 label = tf.cast(tf.RaggedTensor.from_row_lengths(label, row_lengths=[len(label)]), tf.int32)
 
-                yield ((x1_,x2_), label)
+                yield ((x1_, x2_, x3_), label)
 
     ds = tf.data.Dataset.from_generator(npz_gen,
                                          args=[files],
                                          output_signature=((tf.RaggedTensorSpec(shape=(None,None,None, 1), ragged_rank=2, dtype=tf.float32),
-                                                            tf.RaggedTensorSpec(shape=(None,None), dtype=tf.int32)),
+                                                            tf.RaggedTensorSpec(shape=(None,None), dtype=tf.int32),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)
+                                                            ),
                                                             tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)))
 
     return ds
