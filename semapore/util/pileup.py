@@ -30,7 +30,7 @@ def get_pileup_alignment(alignment, reference):
     no_marker = "<NONE>"
 
     alignment_columns = []
-
+    pysam.set_verbosity(0)
     with pysam.AlignmentFile(alignment, "rb") as samfile:
 
         for pileupcolumn in samfile.pileup(min_base_quality=0):

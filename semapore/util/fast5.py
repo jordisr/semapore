@@ -32,7 +32,6 @@ def get_reads(read_ids, dir=None, paths=None):
             fast5_path = os.path.join(dir, fast5_file)
         else:
             sys.exit("Must specify directory or dict of paths")
-        print(fast5_path)
         read_id, signal, segments, sequence = parse_guppy_fast5(fast5_path, scaling="standard")
         reads[r] = {'id':read_id, 'signal':signal, 'segments':segments, 'sequence':sequence}
     return reads

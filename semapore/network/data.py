@@ -1,8 +1,9 @@
 import os
 import sys
 import glob
+from multiprocessing import Pool
 import numpy as np
-import mappy as mp
+import mappy
 import tensorflow as tf
 
 import semapore.util
@@ -61,7 +62,7 @@ def get_alignment_coord(cs):
 
     return [np.array(r2q), np.array(q2r)]
 
-def get_reference_sequences(draft_pileup, window_bounds, aligner):
+def get_reference_sequences(draft_pileup, window_bounds, hit):
     """Get true labels by aligning draft to reference
 
     Args:
@@ -80,11 +81,11 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
     draft_sequence = ''.join([x[1] for x in draft_pileup if type(x) == tuple])
 
     # get first hit from alignment(s) to reference
-    hit = next(aligner.map(draft_sequence, cs=True))
+    #hit = next(aligner.map(draft_sequence, cs=True))
     ref_name = hit.ctg
 
     # get pairwise alignment coordinates
-    r_seq = aligner.seq(ref_name, start=hit.r_st, end=hit.r_en)
+    r_seq = hit.r_seq
     [r2q, q2r] = get_alignment_coord(hit.cs)
     if hit.strand < 0:
         # reverse coordinates for reverse matches
@@ -133,14 +134,14 @@ def get_reference_sequences(draft_pileup, window_bounds, aligner):
                 ref_window_idx.append(window_idx)
                 ref_window_sequences.append(this_ref_seq)
                 draft_window_sequences.append(this_draft_seq)
-                print("{}\t{}..{}\t{}..{}".format(hit.strand, this_draft_seq[:10],this_draft_seq[-10:], this_ref_seq[:10],this_ref_seq[-10:]), file=sys.stderr)
+                #print("{}\t{}..{}\t{}..{}".format(hit.strand, this_draft_seq[:10],this_draft_seq[-10:], this_ref_seq[:10],this_ref_seq[-10:]), file=sys.stderr)
 
             else:
                 print("Warning: window {}, draft_len={} ref_len={}".format(window_idx, len(this_draft_seq), len(this_ref_seq)),  file=sys.stderr)
 
     return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
 
-def make_training_data(draft, alignment, reads, out="tmp", aligner=None, reference="", trimmed_reads="", window=100, max_time=80):
+def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=None, reference="", trimmed_reads="", window=100, max_time=80):
     """Write labeled training data for one draft sequence to NPZ
 
     Args:
@@ -178,11 +179,11 @@ def make_training_data(draft, alignment, reads, out="tmp", aligner=None, referen
     sequence_input, signal_input, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time)
 
     # initialize mappy Aligner
-    if reference and not aligner:
-        aligner = mp.Aligner(reference, preset='map-ont')
+    #if reference and not aligner:
+    #    aligner = mp.Aligner(reference, preset='map-ont', n_threads=1)
 
     print("Moving to draft: {}".format(draft), file=sys.stderr)
-    draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, aligner)
+    draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, hit)
 
     sequence_input = sequence_input[ref_windows]
     signal_input = signal_input[ref_windows]
@@ -202,22 +203,57 @@ def make_training_data(draft, alignment, reads, out="tmp", aligner=None, referen
     # save windows where draft and reference aren't identitcal
     ref_is_diff =  ~(ref_sequences == draft_sequences)
     if ref_is_diff.any():
-        sequence_input = sequence_input[ref_is_diff]
-        signal_input = signal_input[ref_is_diff]
-        signal_input_mask = signal_input_mask[ref_is_diff]
-        files = np.array([draft, alignment, reference, trimmed_reads])
-
         outfile = "{}.errors.npz".format(out)
         np.savez_compressed(outfile,
             files=files,
-            sequence_input=sequence_input,
-            signal_input=signal_input,
-            signal_mask=signal_input_mask,
-            ref_sequences=ref_sequences,
-            draft_sequences=draft_sequences,
+            sequence_input=sequence_input[ref_is_diff],
+            signal_input=signal_input[ref_is_diff],
+            signal_mask=signal_input_mask[ref_is_diff],
+            ref_sequences=ref_sequences[ref_is_diff],
+            draft_sequences=draft_sequences[ref_is_diff],
             ref_name=ref_name)
 
-def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80):
+class TrainingDataHelper:
+    def __init__(self, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80):
+        self.out = out
+        self.draft = draft
+        self.alignment = alignment
+        self.reads = reads
+        self.trimmed_reads = trimmed_reads
+        self.window = window
+        self.max_time = max_time
+        self.reference = reference
+
+    def __call__(self, x):
+        f, hit = x
+        try:
+            return make_training_data(
+                out="{}/{}".format(self.out, os.path.basename(f)),
+                draft="{}/{}".format(f, self.draft),
+                alignment="{}/{}".format(f, self.alignment),
+                trimmed_reads="{}/{}".format(f, self.trimmed_reads),
+                reads=self.reads,
+                hit=hit,
+                window=self.window,
+                max_time=self.max_time)
+        except:
+            pass
+
+class AlignmentCopy:
+    # pickleable version of mappy.Alignment
+    def __init__(self, aligner, hit):
+        self.ctg = hit.ctg
+        self.strand = hit.strand
+        self.cs = hit.cs
+        self.q_st = hit.q_st
+        self.q_en = hit.q_en
+        self.r_st = hit.r_st
+        self.r_en = hit.r_en
+        self.mlen = hit.mlen
+        self.blen = hit.blen
+        self.r_seq = aligner.seq(hit.ctg, start=hit.r_st, end=hit.r_en)
+
+def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80, threads=1):
     """Make training NPZ files for nested directory of assemblies
 
     Args:
@@ -233,21 +269,50 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
     """
 
     os.makedirs(out)
-    aligner = mp.Aligner(reference, preset='map-ont')
+    #aligner = mp.Aligner(reference, preset='map-ont', n_threads=1)
+    #files = [(f, aligner) for f in glob.glob(pattern)]
+    files = glob.glob(pattern)
+    hits = []
 
-    for f in glob.glob(pattern):
-        try:
-            make_training_data(
-                out="{}/{}".format(out, os.path.basename(f)),
-                draft="{}/{}".format(f, draft),
-                alignment="{}/{}".format(f, alignment),
-                trimmed_reads="{}/{}".format(f, trimmed_reads),
-                reads=reads,
-                aligner=aligner,
-                window=window,
-                max_time=max_time)
-        except:
-            pass
+    if threads > 1:
+        aligner = mappy.Aligner(reference, preset='map-ont', n_threads=threads)
+        training_input = []
+        for f in files:
+            draft_path = "{}/{}".format(f, draft)
+            seqs = semapore.util.load_fastx(draft_path, "fasta")
+            if len(seqs) > 0 and len(seqs[0][1]) > 0 :
+                hit = AlignmentCopy(aligner, next(aligner.map(seqs[0][1], cs=True)))
+                training_input.append((f, hit))
+
+        #print(len(training_input))
+        training_helper = TrainingDataHelper(
+                            out=out,
+                            reference=reference,
+                            draft=draft,
+                            alignment=alignment,
+                            trimmed_reads=trimmed_reads,
+                            reads=reads,
+                            window=window,
+                            max_time=max_time)
+
+        with Pool(processes=threads) as pool:
+            pool.map(training_helper, training_input, chunksize=20)
+    else:
+        aligner = mappy.Aligner(reference, preset='map-ont')
+
+        for f in files:
+            try:
+                make_training_data(
+                    out="{}/{}".format(out, os.path.basename(f)),
+                    draft="{}/{}".format(f, draft),
+                    alignment="{}/{}".format(f, alignment),
+                    trimmed_reads="{}/{}".format(f, trimmed_reads),
+                    reads=reads,
+                    aligner=aligner,
+                    window=window,
+                    max_time=max_time)
+            except:
+                pass
 
 def ragged_from_list_of_lists(l):
     return tf.RaggedTensor.from_row_lengths(np.concatenate(l), np.array([len(i) for i in l]))

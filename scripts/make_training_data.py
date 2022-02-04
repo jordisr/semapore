@@ -17,6 +17,7 @@ def main():
     parser.add_argument('-r','--reads', required=True, help='Directory of basecalled reads (FAST5)', default=argparse.SUPPRESS)
     parser.add_argument('-f','--reference', required=True, help='Reference sequence (FASTA)', default=argparse.SUPPRESS)
     parser.add_argument('-o','--out', default="training", help='Name for output directory')
+    parser.add_argument('-t,','--threads', type=int, default=1, help='Number of threads for preprocessing')
     parser.add_argument('--nested', action='store_true', help='Whether to look for reads one level down')
     parser.add_argument('--trimmed_reads', default="", help='Trimmed reads used for assembly, needed if different than raw basecalls (FASTA/FASTQ)')
     parser.add_argument('--window', type=int, default=64, help='Number of pileup alignment columns per input')
@@ -38,7 +39,8 @@ def main():
                     trimmed_reads=args.trimmed_reads,
                     out=args.out,
                     window=args.window,
-                    max_time=args.max_time)
+                    max_time=args.max_time,
+                    threads=args.threads)
 
 if __name__ == "__main__":
     main()
