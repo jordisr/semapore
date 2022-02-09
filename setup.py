@@ -7,11 +7,12 @@ setuptools.setup(
    packages=['semapore', 'semapore.util'],
    entry_points={'console_scripts':['semapore = semapore.__main__:main']},
    install_requires=[
-   'tensorflow==2',
+   'tensorflow>=2',
    'numpy',
    'scipy',
+   'pandas',
    'matplotlib',
-   'biopython'
+   'biopython',
    'pysam',
    'mappy',
    'h5py'

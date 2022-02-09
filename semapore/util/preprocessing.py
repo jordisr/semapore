@@ -3,7 +3,7 @@ from scipy.stats import norm
 
 from .pileup import replace_tuple
 
-def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=False):
+def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=False, draft_first=False):
     """Generate padded input features from the raw signal and reads-to-assembly alignment
 
     Args:
@@ -27,6 +27,10 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
     num_columns = pileup.shape[0]
     num_reads = pileup.shape[1]
     read_names = list(pileup.columns)
+
+    if draft_first:
+        read_names = read_names[1:]
+        num_reads -= 1
 
     # TODO: dynamically resize if it exceeds?
     # TODO: add in padding for last incomplete batch
