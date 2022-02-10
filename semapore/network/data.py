@@ -127,8 +127,9 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
             ref_rel_start = q2r[draft_start-hit.q_st]
             ref_rel_end = q2r[draft_end-hit.q_st]
 
-            this_ref_seq = r_seq[ref_rel_start:ref_rel_end]
-            this_draft_seq = draft_sequence[draft_start:draft_end]
+            # add one for inclusive ranges
+            this_ref_seq = r_seq[ref_rel_start:ref_rel_end + 1]
+            this_draft_seq = draft_sequence[draft_start:draft_end + 1]
 
             if len(this_ref_seq) > 0 and len(this_draft_seq) > 0 and ('N' not in this_ref_seq) and len(this_ref_seq) <= window_size:
                 ref_window_idx.append(window_idx)
@@ -141,7 +142,7 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
 
     return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
 
-def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=None, reference="", trimmed_reads="", window=100, max_time=80):
+def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=None, reference="", trimmed_reads="", window=64, max_time=80):
     """Write labeled training data for one draft sequence to NPZ
 
     Args:
@@ -160,8 +161,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     pileup = semapore.util.get_pileup_alignment(alignment=alignment, reference=draft)
     draft_id = pileup.columns[0]
     draft_pileup = pileup[draft_id]
-    pileup.drop(draft_id, axis=1, inplace=True) # drop draft sequence row
-    pileup_reads = list(pileup.columns)
+    pileup_reads = list(pileup.columns)[1:]
 
     # load reads
     if type(reads) is str:
@@ -176,7 +176,9 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         semapore.util.trim_raw_reads(reads, trimmed_reads)
 
     # batch alignment and reads for inference
-    sequence_input, signal_input, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time)
+    sequence_input, signal_input, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time, draft_first=True)
+    draft_input = sequence_input[:,:,0] 
+    sequence_input = sequence_input[:,:,1:]
 
     # initialize mappy Aligner
     #if reference and not aligner:
@@ -185,6 +187,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     print("Moving to draft: {}".format(draft), file=sys.stderr)
     draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, hit)
 
+    draft_input = draft_input[ref_windows]
     sequence_input = sequence_input[ref_windows]
     signal_input = signal_input[ref_windows]
     signal_input_mask = signal_input_mask[ref_windows]
@@ -193,6 +196,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     outfile = "{}.all.npz".format(out)
     np.savez_compressed(outfile,
         files=files,
+        draft_input=draft_input,
         sequence_input=sequence_input,
         signal_input=signal_input,
         signal_mask=signal_input_mask,
@@ -206,6 +210,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         outfile = "{}.errors.npz".format(out)
         np.savez_compressed(outfile,
             files=files,
+            draft_input=draft_input,
             sequence_input=sequence_input[ref_is_diff],
             signal_input=signal_input[ref_is_diff],
             signal_mask=signal_input_mask[ref_is_diff],
@@ -397,14 +402,13 @@ def generator_dataset_from_files(files):
 
             x1 = training_data['signal_input'].astype(np.float32)
             x2 = training_data['sequence_input'].astype(np.int32)
-            x3 = training_data['draft_sequences']
+            x3 = training_data['draft_input'].astype(np.int32)
             labels = training_data['ref_sequences']
 
             for d in zip(x1,x2,x3,labels):
                 x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[0], axis=3), ragged_rank=2)
                 x2_ = tf.RaggedTensor.from_tensor(d[1])
-                x3_ = [{'A':0,'C':1,'G':2,'T':3}[i] for i in d[2]]
-                x3_ = tf.cast(tf.RaggedTensor.from_row_lengths(x3_, row_lengths=[len(x3_)]), tf.int32)
+                x3_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[2], axis=0))
 
                 label =[{'A':0,'C':1,'G':2,'T':3}[i] for i in d[-1]]
                 label = tf.cast(tf.RaggedTensor.from_row_lengths(label, row_lengths=[len(label)]), tf.int32)
