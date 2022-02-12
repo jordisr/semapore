@@ -7,6 +7,17 @@ import tensorflow as tf
 
 import semapore
 
+class EditDistance(tf.keras.metrics.Metric):
+    def __init__(self, name='edit_distance', **kwargs):
+        super(EditDistance, self).__init__(name=name, **kwargs)
+        self.edit_distance = self.add_weight(name='edit_distance', initializer='zeros')
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        self.edit_distance.assign(semapore.network.edit_distance(y_true=y_true, y_pred=y_pred))
+
+    def result(self):
+        return self.edit_distance
+
 def train_model(args):
     # directory for model checkpoints and logging
     model_name = ('draft_' if args.use_draft else '')+('sequence_signal' if args.use_signal else 'sequence')
@@ -44,7 +55,7 @@ def train_model(args):
     training_files = glob.glob(os.path.join(args.data, "*.errors.npz"))
     print("Found {} files for training".format(len(training_files)))
     dataset = semapore.network.generator_dataset_from_files(training_files)
-    batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(10)
+    batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(1)
     
     with strategy.scope():
         # get the neural network architecture model
@@ -94,7 +105,7 @@ def train_model(args):
                     terminante_on_nan_callback,
                     csv_logger_callback]
 
-        model.compile(optimizer=optimizer, loss=semapore.network.ctc_loss())
+        model.compile(optimizer=optimizer, loss=semapore.network.ctc_loss(), metrics=[EditDistance()])
 
         model.fit(train_dataset, epochs=args.epochs, validation_data=validation_dataset, callbacks=callbacks)
 
