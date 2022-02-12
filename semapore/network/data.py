@@ -210,12 +210,23 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         outfile = "{}.errors.npz".format(out)
         np.savez_compressed(outfile,
             files=files,
-            draft_input=draft_input,
+            draft_input=draft_input[ref_is_diff],
             sequence_input=sequence_input[ref_is_diff],
             signal_input=signal_input[ref_is_diff],
             signal_mask=signal_input_mask[ref_is_diff],
             ref_sequences=ref_sequences[ref_is_diff],
             draft_sequences=draft_sequences[ref_is_diff],
+            ref_name=ref_name)
+
+        outfile = "{}.same.npz".format(out)
+        np.savez_compressed(outfile,
+            files=files,
+            draft_input=draft_input[~ref_is_diff],
+            sequence_input=sequence_input[~ref_is_diff],
+            signal_input=signal_input[~ref_is_diff],
+            signal_mask=signal_input_mask[~ref_is_diff],
+            ref_sequences=ref_sequences[~ref_is_diff],
+            draft_sequences=draft_sequences[~ref_is_diff],
             ref_name=ref_name)
 
 class TrainingDataHelper:

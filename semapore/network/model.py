@@ -21,10 +21,7 @@ def SignalEmbedding(output_dim, params={}):
 
     return  tf.keras.Model(inputs=inputs, outputs=outputs)
 
-def build_model(input_dim=128, encoder_dim=128, sequence_only=False):
-    # if sequence_only, seq_embedding_dim = input_dim
-    # otherwise, seq_embedding_dim = signal_embedding_dim = input_dim/2
-
+def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, use_draft=False):
     # convert tf.RaggedTensor inputs to tensors
     signal_input = tf.keras.Input(shape=(None, None, None, 1), ragged=True, name="SignalInput")
     signal_input_tensor = signal_input.to_tensor()
@@ -32,18 +29,18 @@ def build_model(input_dim=128, encoder_dim=128, sequence_only=False):
     alignment_input = tf.keras.Input(shape=(None, None), ragged=True, name="AlignmentInput")
     alignment_input_tensor = alignment_input.to_tensor()
 
-    # not currently used by network
     draft_input = tf.keras.Input(shape=(1, None), ragged=True, name="DraftInput")
+    draft_input_tensor = tf.squeeze(draft_input, axis=1).to_tensor()
 
     # embedding for raw signal features
     # input: (batch_size, num_columns, num_rows, max_time, 1)
     # output: (batch_size, num_columns, num_rows, signal_embedding_dim)
-    signal_embedding = TimeDistributed2D(SignalEmbedding(input_dim // 2), name="SignalEmbedding")
+    signal_embedding = TimeDistributed2D(SignalEmbedding(signal_dim), name="SignalEmbedding")
 
-    # embedding for each character in the alignment
+    # embedding for each character in the alignment (same embedding used for draft)
     # input: (batch_size, num_columns, num_rows)
     # output: (batch_size, num_columns, num_rows, seq_embedding_dim)
-    char_embedding = tf.keras.layers.Embedding(input_dim=11, mask_zero=False, output_dim=(input_dim if sequence_only else input_dim // 2), name="CharacterEmbedding")
+    char_embedding = tf.keras.layers.Embedding(input_dim=11, mask_zero=False, output_dim=seq_dim, name="CharacterEmbedding")
 
     # encode and summarize column information
     # input: (batch_size, num_columns, num_rows, input_dim)
@@ -61,17 +58,20 @@ def build_model(input_dim=128, encoder_dim=128, sequence_only=False):
     dense = tf.keras.layers.Dense(5, name="DenseOutput")
 
     # put layers together
-    if sequence_only:
-        x = char_embedding(alignment_input_tensor)
-    else:
+    if use_signal:
         x1 = signal_embedding(signal_input_tensor)
         x2 = char_embedding(alignment_input_tensor)
         x = tf.concat([x1, x2], axis=3)
+    else:
+        x = char_embedding(alignment_input_tensor)
     x = rnn_1_td(x)
     x = rnn_2(x)
+    if use_draft:
+        draft_embedding = char_embedding(draft_input_tensor)
+        x = tf.concat([x, draft_embedding], axis=2)
     outputs = dense(x)
 
-    model_name = ("sequence" if sequence_only else "sequence_signal")
+    model_name = ("draft_" if use_draft else "") + ("sequence_signal" if use_signal else "sequence")
     model = tf.keras.Model(inputs=[signal_input, alignment_input, draft_input], outputs=outputs, name=model_name)
 
     return model
