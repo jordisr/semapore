@@ -2,6 +2,7 @@ import os
 import glob
 import argparse
 import datetime
+import subprocess
 import numpy as np
 import tensorflow as tf
 import wandb
@@ -20,17 +21,22 @@ class EditDistance(tf.keras.metrics.Metric):
         return self.edit_distance
 
 def train_model(args):
-    # directory for model checkpoints and logging
-    model_name = ('draft_' if args.use_draft else '')+('sequence_signal' if args.use_signal else 'sequence')
-    out_dir = "{}_{}.{}".format(model_name, args.name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"))
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
 
-    log_file = open(out_dir+'/train.log','w')
-    print('Command-line arguments:',file=log_file)
-    for k,v in args.__dict__.items():
-        print(k,'=',v, file=log_file)
+    # set random seed
+    if args.seed is None:
+        args.seed = int(datetime.datetime.now().timestamp())
+    tf.random.set_seed(args.seed)
+    np.random.seed(args.seed)
 
+    config = {}
+
+    # get current git commit
+    repo_path = os.path.dirname(os.path.realpath(__file__))
+    current_commit = subprocess.check_output(["git","-C",repo_path,"rev-parse", "HEAD"]).rstrip()
+    config['commit'] = current_commit
+
+    # initialize W&B run
+    # TODO: use single config dict that is passed to W&B
     if args.wandb:
         wandb.init(project="semapore", entity="jordisr")
         wandb_log = ['epochs',
@@ -44,16 +50,28 @@ def train_model(args):
                     'signal_dim',
                     'encoder_dim',
                     'use_signal',
-                    'use_draft']
+                    'use_draft',
+                    'error_fraction']
         wandb_config = {}
         for param in wandb_log:
             wandb_config[param] = getattr(args, param)
+        for k,v in config.items():
+            wandb_config[k] = v
         wandb.config.update(wandb_config)
+        run_name = wandb.run.name
+    else:
+        run_name = ('draft_' if args.use_draft else '')+('sequence_signal' if args.use_signal else 'sequence')+'_'+args.name
+    
+    # directory for model checkpoints and logging
+    out_dir = "{}.{}".format(run_name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"))
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
-    # set random seed
-    if args.seed is not None:
-        tf.random.set_seed(args.seed)
-        np.random.seed(args.seed)
+    # log all command line arguments
+    log_file = open(out_dir+'/train.log','w')
+    print('Command-line arguments:',file=log_file)
+    for k,v in args.__dict__.items():
+        print(k,'=',v, file=log_file)
 
     # allow memory growth when using GPU
     gpu_devices = tf.config.list_physical_devices('GPU')
@@ -72,14 +90,26 @@ def train_model(args):
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
     # load training data
-    training_files = glob.glob(os.path.join(args.data, "*.errors.npz"))
-    print("Found {} files for training".format(len(training_files)))
-    dataset = semapore.network.generator_dataset_from_files(training_files)
+    training_files_errors = glob.glob(os.path.join(args.data, "*.errors.npz"))    
+    errors_dataset = semapore.network.generator_dataset_from_files(training_files_errors)
+    print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
+
+    # mix training examples with and without errors
+    assert(args.error_fraction > 0 and args.error_fraction <= 1)
+    if args.error_fraction < 1:
+        training_files_noerrors = glob.glob(os.path.join(args.data, "*.same.npz"))
+        noerrors_dataset = semapore.network.generator_dataset_from_files(training_files_noerrors)
+        dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
+                                                        weights=[args.error_fraction, 1-args.error_fraction],
+                                                        stop_on_empty_dataset=True)
+    else:
+        dataset = errors_dataset
+    
     batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
     
     with strategy.scope():
         # get the neural network architecture model
-        # TODO: specify hyperparameters with JSON file?
+        # TODO: specify hyperparameters with JSON/YAML file?
         model = semapore.network.build_model(
             seq_dim=args.seq_dim, 
             signal_dim=args.signal_dim, 
@@ -144,6 +174,7 @@ if __name__ == '__main__':
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
     parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
+    parser.add_argument('--error_fraction', type=float, default=0.5, help='Fraction of training examples with errors to correct')    
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
