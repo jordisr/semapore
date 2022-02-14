@@ -4,7 +4,8 @@ import argparse
 import datetime
 import numpy as np
 import tensorflow as tf
-
+import wandb
+from wandb.keras import WandbCallback
 import semapore
 
 class EditDistance(tf.keras.metrics.Metric):
@@ -13,7 +14,7 @@ class EditDistance(tf.keras.metrics.Metric):
         self.edit_distance = self.add_weight(name='edit_distance', initializer='zeros')
 
     def update_state(self, y_true, y_pred, sample_weight=None):
-        self.edit_distance.assign(semapore.network.edit_distance(y_true=y_true, y_pred=y_pred))
+        self.edit_distance.assign(tf.reduce_mean(semapore.network.edit_distance(y_true=y_true, y_pred=y_pred)))
 
     def result(self):
         return self.edit_distance
@@ -29,6 +30,25 @@ def train_model(args):
     print('Command-line arguments:',file=log_file)
     for k,v in args.__dict__.items():
         print(k,'=',v, file=log_file)
+
+    if args.wandb:
+        wandb.init(project="semapore", entity="jordisr")
+        wandb_log = ['epochs',
+                    'seed',
+                    'batch_size',
+                    'validation_size', 
+                    'ctc_merge_repeated',
+                    'optimizer',
+                    'learning_rate',
+                    'seq_dim', 
+                    'signal_dim',
+                    'encoder_dim',
+                    'use_signal',
+                    'use_draft']
+        wandb_config = {}
+        for param in wandb_log:
+            wandb_config[param] = getattr(args, param)
+        wandb.config.update(wandb_config)
 
     # set random seed
     if args.seed is not None:
@@ -55,7 +75,7 @@ def train_model(args):
     training_files = glob.glob(os.path.join(args.data, "*.errors.npz"))
     print("Found {} files for training".format(len(training_files)))
     dataset = semapore.network.generator_dataset_from_files(training_files)
-    batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(1)
+    batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
     
     with strategy.scope():
         # get the neural network architecture model
@@ -105,6 +125,9 @@ def train_model(args):
                     terminante_on_nan_callback,
                     csv_logger_callback]
 
+        if args.wandb:
+            callbacks.append(WandbCallback())
+
         model.compile(optimizer=optimizer, loss=semapore.network.ctc_loss(), metrics=[EditDistance()])
 
         model.fit(train_dataset, epochs=args.epochs, validation_data=validation_dataset, callbacks=callbacks)
@@ -120,6 +143,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training. Default: Train on all available GPUs.')
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
+    parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
