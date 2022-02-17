@@ -51,7 +51,11 @@ def train_model(args):
                     'encoder_dim',
                     'use_signal',
                     'use_draft',
-                    'error_fraction']
+                    'error_fraction',
+                    'policy_loss',
+                    'policy_baseline',
+                    'policy_lambda',
+                    'policy_only']
         wandb_config = {}
         for param in wandb_log:
             wandb_config[param] = getattr(args, param)
@@ -158,19 +162,38 @@ def train_model(args):
         if args.wandb:
             callbacks.append(WandbCallback())
 
-        model.compile(optimizer=optimizer, loss=semapore.network.ctc_loss(), metrics=[EditDistance()])
+        epochs_to_train = args.epochs
+        if args.policy_loss and args.policy_skip_epochs > 0:
+            assert(args.policy_skip_epochs < args.epochs)
 
-        model.fit(train_dataset, epochs=args.epochs, validation_data=validation_dataset, callbacks=callbacks)
+            loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=False, 
+                                        use_scst_baseline=False,
+                                        use_ml_loss=True, 
+                                        ctc_merge_repeated=args.ctc_merge_repeated)
+
+            model.compile(optimizer=optimizer, loss=loss_fn, metrics=[EditDistance()])
+            model.fit(train_dataset, epochs=args.policy_skip_epochs, validation_data=validation_dataset, callbacks=callbacks)
+            epochs_to_train -= args.policy_skip_epochs
+
+        loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=args.policy_loss, 
+                                                use_scst_baseline=args.policy_baseline,
+                                                scst_lambda=args.policy_lambda, 
+                                                use_ml_loss=(not args.policy_only), 
+                                                ctc_merge_repeated=args.ctc_merge_repeated)
+
+        model.compile(optimizer=optimizer, loss=loss_fn, metrics=[EditDistance()])
+
+        model.fit(train_dataset, epochs=epochs_to_train, validation_data=validation_dataset, callbacks=callbacks)
 
         model.save(os.path.join(out_dir,"final_model"), include_optimizer=False)
 
 if __name__ == '__main__':
     # general options
     parser = argparse.ArgumentParser(description='Train new Semapore model')
-    parser.add_argument('--data', help='Path to training files in compressed npz format', required=True)
+    parser.add_argument('--data', help='Directory of training data in compressed npz format', required=True)
     parser.add_argument('--name', default='run', help='Name of run')
     parser.add_argument('--epochs', type=int, default=1, help='Number of epochs to train on')
-    parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training. Default: Train on all available GPUs.')
+    parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training (default: train on all available GPUs)')
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
     parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
@@ -182,6 +205,11 @@ if __name__ == '__main__':
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
+    parser.add_argument('--policy_loss', action='store_true', help='Use loss that incorporates policy gradient')
+    parser.add_argument('--policy_baseline', action='store_true', help='Use greedy decoding as baseline for policy gradient')
+    parser.add_argument('--policy_lambda', type=float, default=1, help='Weight given to policy gradient loss')
+    parser.add_argument('--policy_only', action='store_true', help='Only use policy gradient loss, no maximum likelihood')
+    parser.add_argument('--policy_skip_epochs', type=int, default=0, help='Only start policy gradient after first N epochs')
     
     # architecture options
     parser.add_argument('--seq_dim', default=64, type=int, help='')
