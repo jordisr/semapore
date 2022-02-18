@@ -1,6 +1,8 @@
 import os
 import sys
 import glob
+import h5py
+from tqdm import tqdm
 from multiprocessing import Pool
 import numpy as np
 import mappy
@@ -435,3 +437,65 @@ def generator_dataset_from_files(files):
                                                             tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)))
 
     return ds
+
+def generator_dataset_from_hdf5(files):
+    """Create dataset from generator
+
+    Args:
+        files (list): *.hdf5 files
+
+    Returns:
+        tf.data.Dataset: dataset of zipped inputs and labels
+    """
+
+    def hdf5_gen(files_):
+        for f in files_:
+            h5 = h5py.File(f, 'r')
+            for group in h5:
+                training_data = h5[group]
+                x1 = np.array(training_data['signal_input'], dtype=np.float32)
+                x2 = np.array(training_data['sequence_input'], dtype=np.int32)
+                x3 = np.array(training_data['draft_input'], dtype=np.int32)
+                labels = np.array(training_data['ref_sequences'])
+
+                for d in zip(x1,x2,x3,labels):
+                    x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[0], axis=3), ragged_rank=2)
+                    x2_ = tf.RaggedTensor.from_tensor(d[1])
+                    x3_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[2], axis=0))
+                    label =[{'A':0,'C':1,'G':2,'T':3}[i] for i in d[-1].decode('utf-8')]
+                    label = tf.cast(tf.RaggedTensor.from_row_lengths(label, row_lengths=[len(label)]), tf.int32)
+
+                    yield ((x1_, x2_, x3_), label)
+
+    ds = tf.data.Dataset.from_generator(hdf5_gen,
+                                         args=[files],
+                                         output_signature=((tf.RaggedTensorSpec(shape=(None,None,None, 1), ragged_rank=2, dtype=tf.float32),
+                                                            tf.RaggedTensorSpec(shape=(None,None), dtype=tf.int32),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)
+                                                            ),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)))
+
+    return ds
+
+def merge_npz_to_hdf5(npz_files, name, target_size=100):
+    numeric_keys = ['draft_input', 'sequence_input', 'signal_input', 'signal_mask']
+    string_keys = ['files', 'ref_sequences', 'draft_sequences', 'ref_name']
+    
+    file_sizes = np.array([os.path.getsize(x)/1024**2 for x in npz_files])
+    size_bins = np.floor(np.cumsum(file_sizes) / target_size).astype(int)
+    size_bin_end = np.unique(size_bins, return_index=True)[1][1:]
+    num_digits = len(str(size_bins[-1]))
+    print("Merging {} NPZ files into {} HDF5 files...".format(len(file_sizes), size_bins[-1]), file=sys.stderr)
+    
+    range_start = 0
+    for i,range_end in enumerate(tqdm(size_bin_end)):
+        h5_path = "{name}.{num:0{num_digits}}.hdf5".format(name=name, num=i, num_digits=num_digits)
+        with h5py.File(h5_path, "w") as h5_f:
+            for f in npz_files[range_start:range_end]:
+                grp = h5_f.create_group(os.path.basename(f))
+                with np.load(f) as data:
+                    for k in numeric_keys:
+                        grp.create_dataset(k, data=data[k], compression="gzip")
+                    for k in string_keys:
+                        grp.create_dataset(k, data=list(data[k]), dtype=h5py.string_dtype(encoding='utf-8'), compression="gzip")
+        range_start = range_end

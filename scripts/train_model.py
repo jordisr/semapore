@@ -86,19 +86,22 @@ def train_model(args):
     else:
         train_devices = list(map(lambda x:"/gpu:{}".format(x), args.gpu))
 
-    strategy = tf.distribute.MirroredStrategy(devices=train_devices)
+    if len(train_devices) > 1:
+        strategy = tf.distribute.MirroredStrategy(devices=train_devices)
+    else:
+        strategy = tf.distribute.OneDeviceStrategy(device=train_devices[0])
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
     # load training data
-    training_files_errors = glob.glob(os.path.join(args.data, "*.errors.npz"))    
-    errors_dataset = semapore.network.generator_dataset_from_files(training_files_errors)
-    print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
+    training_files_errors = glob.glob(os.path.join(args.data, "errors.*.hdf5"))    
+    errors_dataset = semapore.network.generator_dataset_from_hdf5(training_files_errors)
+    print("Found {} hdf5 files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
 
     # mix training examples with and without errors
     assert(args.error_fraction > 0 and args.error_fraction <= 1)
     if args.error_fraction < 1:
-        training_files_noerrors = glob.glob(os.path.join(args.data, "*.same.npz"))
-        noerrors_dataset = semapore.network.generator_dataset_from_files(training_files_noerrors)
+        training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.hdf5"))
+        noerrors_dataset = semapore.network.generator_dataset_from_hdf5(training_files_noerrors)
         dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
                                                         weights=[args.error_fraction, 1-args.error_fraction],
                                                         stop_on_empty_dataset=True)
@@ -107,6 +110,9 @@ def train_model(args):
     
     batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
     
+    train_dataset = batched_dataset.skip(args.validation_size)
+    validation_dataset = batched_dataset.take(args.validation_size)
+
     with strategy.scope():
         # get the neural network architecture model
         # TODO: specify hyperparameters with JSON/YAML file?
@@ -138,9 +144,6 @@ def train_model(args):
         else:
             optimizer = tf.keras.optimizers.SGD(args.learning_rate)
 
-        train_dataset = batched_dataset.skip(args.validation_size)
-        validation_dataset = batched_dataset.take(args.validation_size)
-
         # callbacks for training
         os.makedirs(os.path.join(out_dir, "checkpoints"))
         model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(os.path.join(out_dir, "checkpoints", "{epoch:02d}.hdf5"), save_freq='epoch', save_weights_only=True)
@@ -167,7 +170,7 @@ def train_model(args):
 if __name__ == '__main__':
     # general options
     parser = argparse.ArgumentParser(description='Train new Semapore model')
-    parser.add_argument('--data', help='Path to training files in compressed npz format', required=True)
+    parser.add_argument('--data', help='Path to training files in compressed hdf5 format', required=True)
     parser.add_argument('--name', default='run', help='Name of run')
     parser.add_argument('--epochs', type=int, default=1, help='Number of epochs to train on')
     parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training. Default: Train on all available GPUs.')
@@ -178,7 +181,7 @@ if __name__ == '__main__':
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
-    parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set')
+    parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set (if --validation not specified)')
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
