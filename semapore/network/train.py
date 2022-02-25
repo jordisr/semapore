@@ -13,7 +13,7 @@ def pileup_to_label(x):
     return tf.ragged.boolean_mask(x_, x_ >= 0) % 4
 
 def edit_distance(y_true, y_pred):
-    y_true_sparse = tf.squeeze(y_true, axis=1).to_sparse()
+    y_true_sparse = y_true.to_sparse()
     predicted_labels = greedy_decode(y_pred).to_sparse()
     return tf.edit_distance(hypothesis=predicted_labels, truth=y_true_sparse, normalize=True)
 
@@ -21,7 +21,7 @@ def ctc_loss(ctc_merge_repeated=False):
     # closure for TF1 CTC loss
     # y_pred are unnormalized logits and y_true is a RaggedTensor of labels
     def loss(y_true, y_pred):
-        y_true_sparse = tf.squeeze(y_true, axis=1).to_sparse()
+        y_true_sparse = y_true.to_sparse()
         sequence_length = tf.ones(tf.shape(y_pred)[0], dtype=np.int32)*tf.shape(y_pred)[1]
         return tf.compat.v1.nn.ctc_loss(inputs=y_pred,
                                         labels=y_true_sparse,
@@ -41,7 +41,7 @@ def training_loop(model, dataset, optimizer=tf.keras.optimizers.Adam(), epochs=1
                 y_pred = model(X)
 
                 loss = tf.reduce_mean(tf.compat.v1.nn.ctc_loss(inputs=y_pred,
-                                                labels=tf.squeeze(y, axis=1).to_sparse(),
+                                                labels=y.to_sparse(),
                                                 sequence_length=tf.ones(tf.shape(y_pred)[0], dtype=np.int32)*tf.shape(y_pred)[1],
                                                 time_major=False,
                                                 preprocess_collapse_repeated=False,

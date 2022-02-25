@@ -477,7 +477,7 @@ def generator_dataset_from_hdf5(files):
 
     return ds
 
-def merge_npz_to_hdf5(npz_files, name, target_size=100):
+def merge_npz_to_hdf5(npz_files, name, target_size=100, compression=None):
     numeric_keys = ['draft_input', 'sequence_input', 'signal_input', 'signal_mask']
     string_keys = ['files', 'ref_sequences', 'draft_sequences', 'ref_name']
     
@@ -495,7 +495,62 @@ def merge_npz_to_hdf5(npz_files, name, target_size=100):
                 grp = h5_f.create_group(os.path.basename(f))
                 with np.load(f) as data:
                     for k in numeric_keys:
-                        grp.create_dataset(k, data=data[k], compression="gzip")
+                        grp.create_dataset(k, data=data[k], compression=compression)
                     for k in string_keys:
-                        grp.create_dataset(k, data=list(data[k]), dtype=h5py.string_dtype(encoding='utf-8'), compression="gzip")
+                        grp.create_dataset(k, data=list(data[k]), dtype=h5py.string_dtype(encoding='utf-8'), compression=compression)
         range_start = range_end
+
+def feature_from_tensor(tensor):
+    # for serialization into TFRecords
+    serialized_tensor = tf.io.serialize_tensor(tensor)
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[serialized_tensor.numpy()]))
+
+def write_serialized_examples_from_hdf5(files):
+    # writes one TFRecord file per HDF5 file
+    # TODO: combine with merge_npz_to_hdf5 to skip generation of HDF5 intermediates
+    for f in files:
+        out_path = "{}.tfrecord".format(os.path.splitext(f)[0])
+        with tf.io.TFRecordWriter(out_path) as file_writer:
+            h5 = h5py.File(f, 'r')
+            for group in h5:
+                training_data = h5[group]
+                x1 = training_data['signal_input'].astype(np.float32)
+                x2 = training_data['sequence_input'].astype(np.int32)
+                x3 = training_data['draft_input'].astype(np.int32)
+                labels = training_data['ref_sequences']
+
+                for x1_, x2_, x3_, labels_ in zip(x1,x2,x3,labels):
+
+                    label_values = [{'A':0,'C':1,'G':2,'T':3}[i] for i in labels_.decode('utf-8')]
+                    label_length = [len(label_values)]
+
+                    features_for_example = {"signal_input": feature_from_tensor(x1_),
+                                            "sequence_input": feature_from_tensor(x2_),
+                                            "draft_input": feature_from_tensor(x3_),
+                                            "label_values": feature_from_tensor(label_values),
+                                            "label_lengths": feature_from_tensor(label_length)}
+
+                    example = tf.train.Example(features=tf.train.Features(feature=features_for_example))
+                    file_writer.write(example.SerializeToString())
+
+@tf.function
+def decode_tfrecord(x):
+    # map over TFRecordDataset to get tensors
+    feature_schema = {"signal_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                      "sequence_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                      "draft_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                      "label_values": tf.io.FixedLenFeature([], dtype=tf.string),
+                      "label_lengths": tf.io.FixedLenFeature([], dtype=tf.string)}
+    
+    parsed_example = tf.io.parse_single_example(x, features=feature_schema)
+    
+    signal_tensor = tf.io.parse_tensor(parsed_example['signal_input'], tf.float32)
+    sequence_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['sequence_input'], tf.int32), (None, None))
+    draft_tensor = tf.io.parse_tensor(parsed_example['draft_input'], tf.int32)
+    labels = tf.ensure_shape(tf.io.parse_tensor(parsed_example['label_values'], tf.int32), (None,))
+    
+    signal_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(signal_tensor, axis=3), ragged_rank=2)
+    sequence_tensor = tf.RaggedTensor.from_tensor(sequence_tensor)
+    draft_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(draft_tensor, axis=0))
+
+    return ((signal_tensor, sequence_tensor, draft_tensor), labels)

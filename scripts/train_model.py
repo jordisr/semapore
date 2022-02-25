@@ -93,25 +93,29 @@ def train_model(args):
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
     # load training data
-    training_files_errors = glob.glob(os.path.join(args.data, "errors.*.hdf5"))    
-    errors_dataset = semapore.network.generator_dataset_from_hdf5(training_files_errors)
-    print("Found {} hdf5 files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
+    training_files_errors = glob.glob(os.path.join(args.data, "errors.*.tfrecord"))    
+    errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(semapore.network.decode_tfrecord)
+    print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
 
     # mix training examples with and without errors
     assert(args.error_fraction > 0 and args.error_fraction <= 1)
     if args.error_fraction < 1:
-        training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.hdf5"))
-        noerrors_dataset = semapore.network.generator_dataset_from_hdf5(training_files_noerrors)
+        training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.tfrecord"))
+        noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(semapore.network.decode_tfrecord)
         dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
                                                         weights=[args.error_fraction, 1-args.error_fraction],
                                                         stop_on_empty_dataset=True)
     else:
         dataset = errors_dataset
     
-    batched_dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True).batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True)
+    batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
     train_dataset = batched_dataset.skip(args.validation_size)
     validation_dataset = batched_dataset.take(args.validation_size)
+
+    if args.batches > 0:
+        train_dataset = train_dataset.take(args.batches)
 
     with strategy.scope():
         # get the neural network architecture model
@@ -148,7 +152,8 @@ def train_model(args):
         os.makedirs(os.path.join(out_dir, "checkpoints"))
         model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(os.path.join(out_dir, "checkpoints", "{epoch:02d}.hdf5"), save_freq='epoch', save_weights_only=True)
         early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor="val_loss", min_delta=1e-2, patience=3, verbose=1)
-        tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq=100)
+        tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq='epoch')
+        #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq=50, profile_batch='50,100')
         terminante_on_nan_callback = tf.keras.callbacks.TerminateOnNaN()
         csv_logger_callback = tf.keras.callbacks.CSVLogger(os.path.join(out_dir,'train.csv'), separator=',', append=False)
 
@@ -177,7 +182,8 @@ if __name__ == '__main__':
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
     parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
-    parser.add_argument('--error_fraction', type=float, default=0.5, help='Fraction of training examples with errors to correct')    
+    parser.add_argument('--error_fraction', type=float, default=0.5, help='Fraction of training examples with errors to correct')
+    parser.add_argument('--batches', type=int, default=0, help='Only train for N batches (for testing)')    
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
