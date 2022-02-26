@@ -111,8 +111,13 @@ def train_model(args):
     dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True)
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
-    train_dataset = batched_dataset.skip(args.validation_size)
-    validation_dataset = batched_dataset.take(args.validation_size)
+    if len(args.validation) > 0:
+        validation_dataset = tf.data.TFRecordDataset(args.validation).map(semapore.network.decode_tfrecord)
+        validation_dataset = validation_dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
+        train_dataset = batched_dataset
+    else:
+        train_dataset = batched_dataset.skip(args.validation_size)
+        validation_dataset = batched_dataset.take(args.validation_size)
 
     if args.batches > 0:
         train_dataset = train_dataset.take(args.batches)
@@ -187,6 +192,7 @@ if __name__ == '__main__':
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
+    parser.add_argument('--validation', default=[], nargs='+', help="Use separate validation set (one or more TFRecord files)")
     parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set (if --validation not specified)')
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
