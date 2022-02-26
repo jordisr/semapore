@@ -11,6 +11,15 @@ def load_fastx(f, fmt="fasta"):
             seqs.append((record.id, str(record.seq)))
     return seqs
 
+def fasta_format(name, seq, width=80):
+    fasta = '>'+name+'\n'
+    window = 0
+    while window+width < len(seq):
+        fasta += (seq[window:window+width]+'\n')
+        window += width
+    fasta += (seq[window:]+'\n')
+    return(fasta)
+
 def get_sequence_offset(full_seq, sub_seq):
     len_full = len(full_seq)
     len_sub = len(sub_seq)
