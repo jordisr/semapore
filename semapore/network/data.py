@@ -544,7 +544,7 @@ def decode_tfrecord(x):
     
     parsed_example = tf.io.parse_single_example(x, features=feature_schema)
     
-    signal_tensor = tf.io.parse_tensor(parsed_example['signal_input'], tf.float32)
+    signal_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['signal_input'], tf.float32), (None, None, None))
     sequence_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['sequence_input'], tf.int32), (None, None))
     draft_tensor = tf.io.parse_tensor(parsed_example['draft_input'], tf.int32)
     labels = tf.ensure_shape(tf.io.parse_tensor(parsed_example['label_values'], tf.int32), (None,))

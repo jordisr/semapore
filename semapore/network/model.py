@@ -13,10 +13,13 @@ def SignalEmbedding(output_dim, params={}):
                                     padding="same",
                                    name= "Conv1D")
 
+    mask = tf.keras.layers.Masking()
+
     rnn = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(output_dim//2, return_sequences=False))
 
     inputs = tf.keras.Input(shape=(None, 1))
     x = conv1d(inputs)
+    x = mask(x)
     outputs = rnn(x)
 
     return  tf.keras.Model(inputs=inputs, outputs=outputs)
@@ -30,7 +33,7 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, us
     alignment_input_tensor = alignment_input.to_tensor()
 
     draft_input = tf.keras.Input(shape=(1, None), ragged=True, name="DraftInput")
-    draft_input_tensor = tf.squeeze(draft_input, axis=1).to_tensor()
+    draft_input_tensor = tf.squeeze(draft_input, axis=1)
 
     # embedding for raw signal features
     # input: (batch_size, num_columns, num_rows, max_time, 1)
