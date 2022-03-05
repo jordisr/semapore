@@ -1,6 +1,18 @@
 import tensorflow as tf
 import numpy as np
 
+class EmptyLayer(tf.keras.layers.Layer):
+    # layer to stop propagation of mask, not sure if needed
+    def __init__(self, **kwargs):
+        super(EmptyLayer, self).__init__(**kwargs)
+        self.supports_masking = False
+
+    def call(self, inputs):
+        return inputs
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
 def TimeDistributed2D(layer, name=None):
     return tf.keras.layers.TimeDistributed(tf.keras.layers.TimeDistributed(layer), name=name)
 
@@ -13,27 +25,31 @@ def SignalEmbedding(output_dim, params={}):
                                     padding="same",
                                    name= "Conv1D")
 
-    mask = tf.keras.layers.Masking()
-
     rnn = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(output_dim//2, return_sequences=False))
+    clear_mask = EmptyLayer(name="clear")
 
     inputs = tf.keras.Input(shape=(None, 1))
-    x = conv1d(inputs)
-    x = mask(x)
-    outputs = rnn(x)
+    signal_mask = tf.keras.Input(shape=(None,), dtype=bool)
 
-    return  tf.keras.Model(inputs=inputs, outputs=outputs)
+    x = conv1d(inputs)
+    x = rnn(x, mask=signal_mask)
+    x = clear_mask(x)
+
+    return  tf.keras.Model(inputs=[inputs, signal_mask], outputs=x)
 
 def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, use_draft=False):
     # convert tf.RaggedTensor inputs to tensors
     signal_input = tf.keras.Input(shape=(None, None, None, 1), ragged=True, name="SignalInput")
     signal_input_tensor = signal_input.to_tensor()
 
+    signal_mask_input = tf.keras.Input(shape=(None, None, None), ragged=True, name="SignalMaskInput")
+    signal_mask_input_tensor = signal_mask_input.to_tensor()
+
     alignment_input = tf.keras.Input(shape=(None, None), ragged=True, name="AlignmentInput")
     alignment_input_tensor = alignment_input.to_tensor()
 
     draft_input = tf.keras.Input(shape=(1, None), ragged=True, name="DraftInput")
-    draft_input_tensor = tf.squeeze(draft_input, axis=1)
+    draft_input_tensor = tf.squeeze(draft_input, axis=1).to_tensor()
 
     # embedding for raw signal features
     # input: (batch_size, num_columns, num_rows, max_time, 1)
@@ -62,7 +78,7 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, us
 
     # put layers together
     if use_signal:
-        x1 = signal_embedding(signal_input_tensor)
+        x1 = signal_embedding([signal_input_tensor, signal_mask_input_tensor])
         x2 = char_embedding(alignment_input_tensor)
         x = tf.concat([x1, x2], axis=3)
     else:
@@ -75,6 +91,6 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, us
     outputs = dense(x)
 
     model_name = ("draft_" if use_draft else "") + ("sequence_signal" if use_signal else "sequence")
-    model = tf.keras.Model(inputs=[signal_input, alignment_input, draft_input], outputs=outputs, name=model_name)
+    model = tf.keras.Model(inputs=[signal_input, signal_mask_input, alignment_input, draft_input], outputs=outputs, name=model_name)
 
     return model

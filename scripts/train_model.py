@@ -93,15 +93,16 @@ def train_model(args):
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
     # load training data
+    decoder_fn = semapore.network.make_decoder(5)
     training_files_errors = glob.glob(os.path.join(args.data, "errors.*.tfrecord"))    
-    errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(semapore.network.decode_tfrecord)
+    errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(decoder_fn)
     print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
 
     # mix training examples with and without errors
     assert(args.error_fraction > 0 and args.error_fraction <= 1)
     if args.error_fraction < 1:
         training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.tfrecord"))
-        noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(semapore.network.decode_tfrecord)
+        noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(decoder_fn)
         dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
                                                         weights=[args.error_fraction, 1-args.error_fraction],
                                                         stop_on_empty_dataset=True)
@@ -112,7 +113,7 @@ def train_model(args):
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
     if len(args.validation) > 0:
-        validation_dataset = tf.data.TFRecordDataset(args.validation).map(semapore.network.decode_tfrecord)
+        validation_dataset = tf.data.TFRecordDataset(args.validation).map(decoder_fn)
         validation_dataset = validation_dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
         train_dataset = batched_dataset
     else:

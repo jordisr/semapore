@@ -71,13 +71,11 @@ def main():
             
     with tf.device(device):
 
-        # convert input to expected tensor shapes
-        signal_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(signal_input, axis=3), ragged_rank=2)
-        sequence_tensor = tf.RaggedTensor.from_tensor(sequence_input)
-        draft_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(draft_input, axis=1))
-
-        # prediction on input batches
-        logits = model.predict((signal_tensor, sequence_tensor, draft_tensor))
+        ds = semapore.network.dataset_from_arrays(signal_input, signal_input_mask, sequence_input, draft_input)
+        logits = []
+        for x in ds.batch(32):
+            logits.append(model.predict_on_batch(x))
+        logits = tf.concat(logits, axis=0)
 
     # viterbi decoding and stitch sequences
     decoded_labels = semapore.network.greedy_decode(logits).numpy()

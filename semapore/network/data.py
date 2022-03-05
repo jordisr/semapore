@@ -178,7 +178,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         semapore.util.trim_raw_reads(reads, trimmed_reads)
 
     # batch alignment and reads for inference
-    sequence_input, signal_input, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time, draft_first=True)
+    sequence_input, signal_input, signal_length, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time, draft_first=True)
     draft_input = sequence_input[:,:,0] 
     sequence_input = sequence_input[:,:,1:]
 
@@ -533,24 +533,88 @@ def write_serialized_examples_from_hdf5(files):
                     example = tf.train.Example(features=tf.train.Features(feature=features_for_example))
                     file_writer.write(example.SerializeToString())
 
-@tf.function
-def decode_tfrecord(x):
-    # map over TFRecordDataset to get tensors
-    feature_schema = {"signal_input": tf.io.FixedLenFeature([], dtype=tf.string),
-                      "sequence_input": tf.io.FixedLenFeature([], dtype=tf.string),
-                      "draft_input": tf.io.FixedLenFeature([], dtype=tf.string),
-                      "label_values": tf.io.FixedLenFeature([], dtype=tf.string),
-                      "label_lengths": tf.io.FixedLenFeature([], dtype=tf.string)}
-    
-    parsed_example = tf.io.parse_single_example(x, features=feature_schema)
-    
-    signal_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['signal_input'], tf.float32), (None, None, None))
-    sequence_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['sequence_input'], tf.int32), (None, None))
-    draft_tensor = tf.io.parse_tensor(parsed_example['draft_input'], tf.int32)
-    labels = tf.ensure_shape(tf.io.parse_tensor(parsed_example['label_values'], tf.int32), (None,))
-    
-    signal_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(signal_tensor, axis=3), ragged_rank=2)
-    sequence_tensor = tf.RaggedTensor.from_tensor(sequence_tensor)
-    draft_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(draft_tensor, axis=0))
+def make_decoder(stride=1):
+    @tf.function
+    def decode_tfrecord(x):
+        # map over TFRecordDataset to get tensors
+        feature_schema = {"signal_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "signal_mask": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "sequence_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "draft_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "label_values": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "label_lengths": tf.io.FixedLenFeature([], dtype=tf.string)}
+        
+        parsed_example = tf.io.parse_single_example(x, features=feature_schema)
+        
+        signal_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['signal_input'], tf.float32), (None, None, None))
+        signal_mask_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['signal_mask'], tf.bool), (None, None,None))
+        sequence_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['sequence_input'], tf.int32), (None, None))
+        draft_tensor = tf.io.parse_tensor(parsed_example['draft_input'], tf.int32)
+        labels = tf.ensure_shape(tf.io.parse_tensor(parsed_example['label_values'], tf.int32), (None,))
+        
+        signal_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(signal_tensor, axis=3), ragged_rank=2)
+        signal_mask_tensor = tf.RaggedTensor.from_tensor(signal_mask_tensor, ragged_rank=1)
+        sequence_tensor = tf.RaggedTensor.from_tensor(sequence_tensor)
+        draft_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(draft_tensor, axis=0))
 
-    return ((signal_tensor, sequence_tensor, draft_tensor), labels)
+        return ((signal_tensor, signal_mask_tensor[:,:,::stride], sequence_tensor, draft_tensor), labels)
+    return decode_tfrecord
+
+def dataset_from_arrays(signal, signal_mask, sequence, draft):
+    # takes ndarrays returned by featurize_inputs()
+    # return a tf.data.Dataset
+    # ndarray -> RaggedTensor -> Tensor wasn't working for forward pass (to_tensor() raising error)
+    # generator ensures correct types for input to network
+
+    def gen(signal, signal_mask, sequence, draft):
+        for x in zip(signal, signal_mask, sequence, draft):
+            x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(tf.cast(x[0], tf.float32), axis=3), ragged_rank=2)
+            x2_ = tf.RaggedTensor.from_tensor(tf.cast(x[1], tf.bool), ragged_rank=2)
+            x3_ = tf.RaggedTensor.from_tensor(tf.cast(x[2], tf.int32))
+            x4_ = tf.RaggedTensor.from_tensor(tf.expand_dims(tf.cast(x[3], tf.int32), axis=0))
+
+            yield x1_, x2_, x3_, x4_
+
+    ds = tf.data.Dataset.from_generator(gen,
+                                         args=[signal, signal_mask, sequence, draft],
+                                         output_signature=((tf.RaggedTensorSpec(shape=(None,None,None, 1), ragged_rank=2, dtype=tf.float32),
+                                                            tf.RaggedTensorSpec(shape=(None,None,None), ragged_rank=2, dtype=tf.bool),
+                                                            tf.RaggedTensorSpec(shape=(None,None), dtype=tf.int32),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)
+                                                            )))
+
+    return ds
+
+def write_serialized_from_npz(npz_files, name, num_files=10):    
+    file_sizes = np.array([os.path.getsize(x)/1024**2 for x in npz_files])
+    size_bins = np.floor(np.cumsum(file_sizes) / num_files).astype(int)
+    size_bin_end = np.unique(size_bins, return_index=True)[1][1:]
+    num_digits = len(str(size_bins[-1]))
+    
+    range_start = 0
+    for i,range_end in enumerate(tqdm(size_bin_end)):
+        out_path = "{name}.{num:0{num_digits}}.tfrecord".format(name=name, num=i, num_digits=num_digits)
+        with tf.io.TFRecordWriter(out_path) as file_writer:
+            for f in npz_files[range_start:range_end]:                
+                with np.load(f) as data:
+                    x1 = data['signal_input'].astype(np.float32)
+                    x2 = data['signal_mask'].astype(bool)
+                    x3 = data['sequence_input'].astype(np.int32)
+                    x4 = data['draft_input'].astype(np.int32)
+                    labels = data['ref_sequences']
+
+                    for x1_, x2_, x3_, x4_, labels_ in zip(x1,x2,x3,x4,labels):
+
+                        label_values = [{'A':0,'C':1,'G':2,'T':3}[i] for i in labels_]
+                        label_length = [len(label_values)]
+
+                        features_for_example = {"signal_input": feature_from_tensor(x1_),
+                                                "signal_mask": feature_from_tensor(x2_),
+                                                "sequence_input": feature_from_tensor(x3_),
+                                                "draft_input": feature_from_tensor(x4_),
+                                                "label_values": feature_from_tensor(label_values),
+                                                "label_lengths": feature_from_tensor(label_length)}
+
+                        example = tf.train.Example(features=tf.train.Features(feature=features_for_example))
+                        file_writer.write(example.SerializeToString())
+        range_start = range_end
