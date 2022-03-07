@@ -12,11 +12,25 @@ def pileup_to_label(x):
     x_ = x - 3
     return tf.ragged.boolean_mask(x_, x_ >= 0) % 4
 
+def q_quality(x):
+    return -10*np.log10(x)
+
 def edit_distance(y_true, y_pred):
     y_true_sparse = y_true.to_sparse()
     predicted_labels = greedy_decode(y_pred).to_sparse()
     return tf.edit_distance(hypothesis=predicted_labels, truth=y_true_sparse, normalize=True)
 
+def draft_edit_distance(draft, y_true):
+    y_pred = tf.squeeze(semapore.network.pileup_to_label(x[3]), axis=1).to_sparse()
+    return tf.edit_distance(hypothesis=y_pred, truth=y.to_sparse(), normalize=True)
+
+def get_draft_edit_distance(ds):
+    edit_distance = []
+    for x,y in ds:
+        edit_distance.append(tf.reduce_mean(draft_edit_distance(x[3],y)))
+    edit_distance=np.array(edit_distance)
+    return q_quality(np.mean(edit_distance))
+    
 def ctc_loss(ctc_merge_repeated=False):
     # closure for TF1 CTC loss
     # y_pred are unnormalized logits and y_true is a RaggedTensor of labels

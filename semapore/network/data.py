@@ -587,9 +587,9 @@ def dataset_from_arrays(signal, signal_mask, sequence, draft):
 
 def write_serialized_from_npz(npz_files, name, num_files=10):    
     file_sizes = np.array([os.path.getsize(x)/1024**2 for x in npz_files])
-    size_bins = np.floor(np.cumsum(file_sizes) / num_files).astype(int)
+    size_bins = np.floor(np.cumsum(file_sizes) / (np.sum(file_sizes)/num_files)).astype(int)
     size_bin_end = np.unique(size_bins, return_index=True)[1][1:]
-    num_digits = len(str(size_bins[-1]))
+    num_digits = len(str(size_bins[-1]-1)) # files are 0-indexed i.e. only need 1 digit for 0-9
     
     range_start = 0
     for i,range_end in enumerate(tqdm(size_bin_end)):

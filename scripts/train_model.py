@@ -49,8 +49,7 @@ def train_model(args):
                     'seq_dim', 
                     'signal_dim',
                     'encoder_dim',
-                    'use_signal',
-                    'use_draft',
+                    'architecture',
                     'error_fraction']
         wandb_config = {}
         for param in wandb_log:
@@ -60,7 +59,7 @@ def train_model(args):
         wandb.config.update(wandb_config)
         run_name = wandb.run.name
     else:
-        run_name = ('draft_' if args.use_draft else '')+('sequence_signal' if args.use_signal else 'sequence')+'_'+args.name
+        run_name = args.architecture + '_' + args.name
     
     # directory for model checkpoints and logging
     out_dir = "{}.{}".format(run_name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"))
@@ -112,8 +111,8 @@ def train_model(args):
     dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True)
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
-    if len(args.validation) > 0:
-        validation_dataset = tf.data.TFRecordDataset(args.validation).map(decoder_fn)
+    if args.validation:
+        validation_dataset = tf.data.TFRecordDataset(glob.glob("{}/*.tfrecord".format(args.validation))).map(decoder_fn)
         validation_dataset = validation_dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
         train_dataset = batched_dataset
     else:
@@ -123,6 +122,11 @@ def train_model(args):
     if args.batches > 0:
         train_dataset = train_dataset.take(args.batches)
 
+    # parse architecture from argument
+    architecture = args.architecture.split('_')
+    use_draft = (architecture[0] == 'draft')
+    use_signal = (architecture[-1] == 'signal')
+    
     with strategy.scope():
         # get the neural network architecture model
         # TODO: specify hyperparameters with JSON/YAML file?
@@ -130,8 +134,8 @@ def train_model(args):
             seq_dim=args.seq_dim, 
             signal_dim=args.signal_dim, 
             encoder_dim=args.encoder_dim,
-            use_signal=args.use_signal,
-            use_draft=args.use_draft
+            use_signal=use_signal,
+            use_draft=use_draft
         )
 
         # save architecture
@@ -193,18 +197,17 @@ if __name__ == '__main__':
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
-    parser.add_argument('--validation', default=[], nargs='+', help="Use separate validation set (one or more TFRecord files)")
+    parser.add_argument('--validation', default=None, help="Path to directory wiht one or more TFRecord files")
     parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set (if --validation not specified)')
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
     
     # architecture options
+    parser.add_argument('--architecture', choices=['sequence','sequence_signal','draft_sequence','draft_sequence_signal'], default='sequence', help='')
     parser.add_argument('--seq_dim', default=64, type=int, help='')
     parser.add_argument('--signal_dim', default=64, type=int, help='')
     parser.add_argument('--encoder_dim', default=128, type=int, help='')
-    parser.add_argument('--use_signal', action='store_true', help='')
-    parser.add_argument('--use_draft', action='store_true', help='')
     
     args = parser.parse_args()
     train_model(args)
