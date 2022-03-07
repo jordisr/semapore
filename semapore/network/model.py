@@ -16,7 +16,7 @@ class EmptyLayer(tf.keras.layers.Layer):
 def TimeDistributed2D(layer, name=None):
     return tf.keras.layers.TimeDistributed(tf.keras.layers.TimeDistributed(layer), name=name)
 
-def SignalEmbedding(output_dim, params={}):
+def SignalEmbedding(output_dim, mask=True, params={}):
 
     conv1d = tf.keras.layers.Conv1D(filters=params.get('conv1d_filters', 32),
                                     kernel_size=params.get('conv1d_kernel_size', 3),
@@ -32,12 +32,17 @@ def SignalEmbedding(output_dim, params={}):
     signal_mask = tf.keras.Input(shape=(None,), dtype=bool)
 
     x = conv1d(inputs)
-    x = rnn(x, mask=signal_mask)
-    x = clear_mask(x)
+    if mask:
+        x = rnn(x, mask=signal_mask)
+        x = clear_mask(x)
+    else:
+        x = rnn(x)
 
     return  tf.keras.Model(inputs=[inputs, signal_mask], outputs=x)
 
-def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, use_draft=False):
+def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_sequence=True, use_signal=False, use_draft=False):
+    assert use_sequence or use_signal or use_draft, "Must specify at least one input"
+
     # convert tf.RaggedTensor inputs to tensors
     signal_input = tf.keras.Input(shape=(None, None, None, 1), ragged=True, name="SignalInput")
     signal_input_tensor = signal_input.to_tensor()
@@ -78,14 +83,21 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, us
 
     # put layers together
     if use_signal:
-        x1 = signal_embedding([signal_input_tensor, signal_mask_input_tensor])
-        x2 = char_embedding(alignment_input_tensor)
-        x = tf.concat([x1, x2], axis=3)
+        signal_embedding_output = signal_embedding([signal_input_tensor, signal_mask_input_tensor])
+
+    if use_sequence:
+        seq_embedding_output = char_embedding(alignment_input_tensor)
+
+    if use_signal and use_sequence:
+        x = tf.concat([signal_embedding_output, seq_embedding_output], axis=3)
     else:
-        x = char_embedding(alignment_input_tensor)
+        x = (signal_embedding_output if use_signal else seq_embedding_output)
+
     x = rnn_1_td(x)
     x = rnn_2(x)
+
     if use_draft:
+        # draft concatenated in at the end
         draft_embedding = char_embedding(draft_input_tensor)
         x = tf.concat([x, draft_embedding], axis=2)
     outputs = dense(x)

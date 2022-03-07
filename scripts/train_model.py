@@ -126,6 +126,7 @@ def train_model(args):
     architecture = args.architecture.split('_')
     use_draft = (architecture[0] == 'draft')
     use_signal = (architecture[-1] == 'signal')
+    use_sequence = ('sequence' in architecture)
     
     with strategy.scope():
         # get the neural network architecture model
@@ -135,7 +136,8 @@ def train_model(args):
             signal_dim=args.signal_dim, 
             encoder_dim=args.encoder_dim,
             use_signal=use_signal,
-            use_draft=use_draft
+            use_draft=use_draft,
+            use_sequence=use_sequence
         )
 
         # save architecture
@@ -204,7 +206,7 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
     
     # architecture options
-    parser.add_argument('--architecture', choices=['sequence','sequence_signal','draft_sequence','draft_sequence_signal'], default='sequence', help='')
+    parser.add_argument('--architecture', choices=['sequence','signal','draft_signal','sequence_signal','draft_sequence','draft_sequence_signal'], default='sequence', help='')
     parser.add_argument('--seq_dim', default=64, type=int, help='')
     parser.add_argument('--signal_dim', default=64, type=int, help='')
     parser.add_argument('--encoder_dim', default=128, type=int, help='')
