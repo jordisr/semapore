@@ -199,7 +199,7 @@ if __name__ == '__main__':
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
-    parser.add_argument('--validation', default=None, help="Path to directory wiht one or more TFRecord files")
+    parser.add_argument('--validation', default=None, help="Path to directory with one or more TFRecord files")
     parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set (if --validation not specified)')
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')

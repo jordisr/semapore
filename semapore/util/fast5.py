@@ -12,7 +12,7 @@ def find_nested_reads(dir):
         lookup_table[os.path.basename(r)] = r
     return lookup_table
 
-def get_reads(read_ids, dir=None, paths=None):
+def get_reads(read_ids, dir=None, paths=None, scaling=None):
     """Load basecalled FAST5 files
 
     Args:
@@ -32,7 +32,7 @@ def get_reads(read_ids, dir=None, paths=None):
             fast5_path = os.path.join(dir, fast5_file)
         else:
             sys.exit("Must specify directory or dict of paths")
-        read_id, signal, segments, sequence = parse_guppy_fast5(fast5_path, scaling="standard")
+        read_id, signal, segments, sequence = parse_guppy_fast5(fast5_path, scaling=scaling)
         reads[r] = {'id':read_id, 'signal':signal, 'segments':segments, 'sequence':sequence}
     return reads
 

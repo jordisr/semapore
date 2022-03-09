@@ -61,20 +61,23 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
             alignment_idx = np.array([x[0] for x in pileup_window[i]])
 
             for j, read_id in enumerate(read_names):
-                if alignment_column[j] > 2: # A,C,G,T,a,c,g,t
+                if alignment_column[j+draft_first] > 2: # A,C,G,T,a,c,g,t
 
                     # alignment index => basecall sequence index
-                    basecall_idx = alignment_idx[j]
+                    basecall_idx = alignment_idx[j+draft_first]
+                    if alignment_column[j+draft_first] > 6:
+                        # correct position if sequence is reverse mapped
+                        basecall_idx = reads[read_id]["segments"].shape[0] - basecall_idx - 1
 
                     # basecall sequence index => signal event bounds
                     event_bounds = reads[read_id]["segments"][basecall_idx]
+                    #base_from_read = reads[read_id]["sequence"][basecall_idx]
+                    #base_from_pileup = ['A','C','G','T','a','c','g','t'][(alignment_column[j+1]-3)]
+                    #print(j, base_from_read, base_from_pileup)
 
                     # signal event bounds => raw signal
                     this_signal = reads[read_id]["signal"][event_bounds[0]:event_bounds[1]]
                     num_signals = this_signal.shape[0]
-                    # this is a placeholder for querying FAST5 file
-                    #num_signals = int(norm.rvs(9,2))
-                    #this_signal = np.random.random(num_signals)
 
                     signal_data[col_i, i, j, :num_signals] = this_signal[:max_time]
                     signal_mask[col_i, i, j, :num_signals] = True
