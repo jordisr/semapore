@@ -5,6 +5,7 @@ import h5py
 from tqdm import tqdm
 from multiprocessing import Pool
 import numpy as np
+import pandas as pd
 import mappy
 import tensorflow as tf
 
@@ -95,7 +96,7 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
         r2q = max(r2q)-r2q[::-1]
         q2r = max(q2r)-q2r[::-1]
 
-    print("Identity:{} Strand:{}".format(hit.mlen/hit.blen, hit.strand), file=sys.stderr)
+    #print("Identity:{} Strand:{}".format(hit.mlen/hit.blen, hit.strand), file=sys.stderr)
 
     draft_window_sequences = []
     ref_window_sequences = []
@@ -178,7 +179,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         semapore.util.trim_raw_reads(reads, trimmed_reads)
 
     # batch alignment and reads for inference
-    sequence_input, signal_input, signal_length, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time, draft_first=True)
+    sequence_input, signal_input, signal_input_mask, window_bounds = semapore.util.featurize_inputs(pileup, reads, window_size=window, max_time=max_time, draft_first=True)
     draft_input = sequence_input[:,:,0] 
     sequence_input = sequence_input[:,:,1:]
 
@@ -186,7 +187,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     #if reference and not aligner:
     #    aligner = mp.Aligner(reference, preset='map-ont', n_threads=1)
 
-    print("Moving to draft: {}".format(draft), file=sys.stderr)
+    #print("Moving to draft: {}".format(draft), file=sys.stderr)
     draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, hit)
 
     draft_input = draft_input[ref_windows]
@@ -206,8 +207,11 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         draft_sequences=draft_sequences,
         ref_name=ref_name)
 
-    # save windows where draft and reference aren't identitcal
+    # save windows where draft and reference aren't identical
     ref_is_diff =  ~(ref_sequences == draft_sequences)
+    #print(np.sum(ref_is_diff), file=sys.stderr)
+    #print(ref_sequences[0])
+    #print(draft_sequences[0])
     if ref_is_diff.any():
         outfile = "{}.errors.npz".format(out)
         np.savez_compressed(outfile,
@@ -230,6 +234,9 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
             ref_sequences=ref_sequences[~ref_is_diff],
             draft_sequences=draft_sequences[~ref_is_diff],
             ref_name=ref_name)
+
+    row = [os.path.dirname(draft).split('/')[-1], np.sum(ref_is_diff), len(draft_input)-np.sum(ref_is_diff)] + list(ref_name)
+    return row
 
 class TrainingDataHelper:
     def __init__(self, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80):
@@ -255,7 +262,8 @@ class TrainingDataHelper:
                 window=self.window,
                 max_time=self.max_time)
         except:
-            pass
+            print("WARNING: Caught error with {}".format(os.path.basename(f)))
+            return [os.path.basename(f)] + [None] * 9
 
 class AlignmentCopy:
     # pickleable version of mappy.Alignment
@@ -293,16 +301,16 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
     hits = []
 
     if threads > 1:
-        aligner = mappy.Aligner(reference, preset='map-ont', n_threads=threads)
+        aligner = mappy.Aligner(reference, preset='map-ont', n_threads=1)
         training_input = []
-        for f in files:
+        print("aligning to reference...", file=sys.stderr)
+        for f in tqdm(files):
             draft_path = "{}/{}".format(f, draft)
             seqs = semapore.util.load_fastx(draft_path, "fasta")
             if len(seqs) > 0 and len(seqs[0][1]) > 0 :
                 hit = AlignmentCopy(aligner, next(aligner.map(seqs[0][1], cs=True)))
                 training_input.append((f, hit))
 
-        #print(len(training_input))
         training_helper = TrainingDataHelper(
                             out=out,
                             reference=reference,
@@ -312,9 +320,13 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
                             reads=reads,
                             window=window,
                             max_time=max_time)
-
+        print("starting multiprocessing...", file=sys.stderr)
         with Pool(processes=threads) as pool:
-            pool.map(training_helper, training_input, chunksize=20)
+            #map_output = pool.map(training_helper, training_input, chunksize=20)
+            map_output = list(tqdm(pool.imap(training_helper, training_input, chunksize=20), total=len(training_input)))
+            #map_output = pool.imap(training_helper, training_input, chunksize=20)
+        map_output = pd.DataFrame(map_output, columns=['name','num_diff','num_same','genome','strand','identity','query_start','query_end','ref_start','ref_end'])
+        map_output.to_csv(os.path.join(out,"log.csv"), index=False)
     else:
         aligner = mappy.Aligner(reference, preset='map-ont')
 
