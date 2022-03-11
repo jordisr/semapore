@@ -13,12 +13,18 @@ class EditDistance(tf.keras.metrics.Metric):
     def __init__(self, name='edit_distance', **kwargs):
         super(EditDistance, self).__init__(name=name, **kwargs)
         self.edit_distance = self.add_weight(name='edit_distance', initializer='zeros')
+        self.num_examples = self.add_weight(name='num_examples', initializer='zeros')
 
     def update_state(self, y_true, y_pred, sample_weight=None):
-        self.edit_distance.assign(tf.reduce_mean(semapore.network.edit_distance(y_true=y_true, y_pred=y_pred)))
+        self.num_examples.assign_add(1)
+        self.edit_distance.assign_add(tf.reduce_mean(semapore.network.edit_distance(y_true=y_true, y_pred=y_pred)))
 
     def result(self):
-        return self.edit_distance
+        return self.edit_distance/self.num_examples
+
+    def reset_state(self):
+        self.edit_distance.assign(0)
+        self.num_examples.assign(0)
 
 def train_model(args):
 
@@ -112,7 +118,9 @@ def train_model(args):
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
     if args.validation:
-        validation_dataset = tf.data.TFRecordDataset(glob.glob("{}/*.tfrecord".format(args.validation))).map(decoder_fn)
+        validation_files = glob.glob("{}/*.tfrecord".format(args.validation))
+        print("Found {} files for validation set".format(len(validation_files)))
+        validation_dataset = tf.data.TFRecordDataset(validation_files).map(decoder_fn)
         validation_dataset = validation_dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
         train_dataset = batched_dataset
     else:

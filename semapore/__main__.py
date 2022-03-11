@@ -50,7 +50,7 @@ def main():
         # otherwise, load architecture from JSON file
         with open(args.model) as json_file:
             json_config = json_file.read()
-            model = tf.keras.models.model_from_json(json_config)
+            model = tf.keras.models.model_from_json(json_config, custom_objects={'EmptyLayer':semapore.network.EmptyLayer})
 
         # load trained model weights separately
         if os.path.isdir(args.weights):

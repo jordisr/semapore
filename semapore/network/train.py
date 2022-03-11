@@ -21,8 +21,8 @@ def edit_distance(y_true, y_pred):
     return tf.edit_distance(hypothesis=predicted_labels, truth=y_true_sparse, normalize=True)
 
 def draft_edit_distance(draft, y_true):
-    y_pred = tf.squeeze(semapore.network.pileup_to_label(x[3]), axis=1).to_sparse()
-    return tf.edit_distance(hypothesis=y_pred, truth=y.to_sparse(), normalize=True)
+    y_pred = tf.squeeze(pileup_to_label(draft), axis=1).to_sparse()
+    return tf.edit_distance(hypothesis=y_pred, truth=y_true.to_sparse(), normalize=True)
 
 def get_draft_edit_distance(ds):
     edit_distance = []
