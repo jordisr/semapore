@@ -171,7 +171,7 @@ def train_model(args):
         # callbacks for training
         os.makedirs(os.path.join(out_dir, "checkpoints"))
         model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(os.path.join(out_dir, "checkpoints", "{epoch:02d}.hdf5"), save_freq='epoch', save_weights_only=True)
-        early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor="val_loss", min_delta=1e-2, patience=3, verbose=1)
+        early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor="val_loss", min_delta=1e-3, patience=3, verbose=1)
         tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq='epoch')
         #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq=50, profile_batch='50,100')
         terminante_on_nan_callback = tf.keras.callbacks.TerminateOnNaN()
@@ -218,6 +218,8 @@ if __name__ == '__main__':
     parser.add_argument('--seq_dim', default=64, type=int, help='')
     parser.add_argument('--signal_dim', default=64, type=int, help='')
     parser.add_argument('--encoder_dim', default=128, type=int, help='')
+    parser.add_argument('--num_row_layers', default=1, type=int, help='')
+    parser.add_argument('--num_col_layers', default=1, type=int, help='')
     
     args = parser.parse_args()
     train_model(args)
