@@ -52,7 +52,7 @@ def scst_ctc_loss(use_scst_loss=True, use_scst_baseline=True, scst_lambda=1, use
     def loss_fn(y_true, y_pred):
         sequence_length = tf.ones(tf.shape(y_pred)[0], dtype=np.int32)*tf.shape(y_pred)[1]
         loss = 0
-        y_true_sparse = tf.squeeze(y_true, axis=1).to_sparse()
+        y_true_sparse = y_true.to_sparse()
         if use_scst_loss:
             # sample single path from each output probability and convert to labels
             sampled_paths = tfp.distributions.Categorical(logits=y_pred).sample()

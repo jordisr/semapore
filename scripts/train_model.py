@@ -136,11 +136,17 @@ def train_model(args):
         train_dataset = train_dataset.take(args.batches)
 
     # parse architecture from argument
-    architecture = args.architecture.split('_')
-    use_draft = (architecture[0] == 'draft')
-    use_signal = (architecture[-1] == 'signal')
-    use_sequence = ('sequence' in architecture)
-    
+    architecture_args = args.architecture.split('_')
+    use_draft = (architecture_args[0] == 'draft')
+    use_signal = (architecture_args[-1] == 'signal')
+    use_sequence = ('sequence' in architecture_args)
+
+    # parse loss function from argument
+    loss_args = args.loss.split('_')
+    use_ml_loss=('ml' in loss_args) 
+    use_scst_loss= ('policy' in loss_args)
+    use_scst_baseline=('baseline' in loss_args)
+
     with strategy.scope():
         # get the neural network architecture model
         # TODO: specify hyperparameters with JSON/YAML file?
@@ -192,7 +198,7 @@ def train_model(args):
             callbacks.append(WandbCallback())
 
         epochs_to_train = args.epochs
-        if args.policy_loss and args.policy_skip_epochs > 0:
+        if use_scst_loss and args.policy_skip_epochs > 0:
             assert(args.policy_skip_epochs < args.epochs)
 
             loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=False, 
@@ -204,10 +210,10 @@ def train_model(args):
             model.fit(train_dataset, epochs=args.policy_skip_epochs, validation_data=validation_dataset, callbacks=callbacks)
             epochs_to_train -= args.policy_skip_epochs
 
-        loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=args.policy_loss, 
-                                                use_scst_baseline=args.policy_baseline,
+        loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=use_scst_loss, 
+                                                use_scst_baseline=use_scst_baseline,
                                                 scst_lambda=args.policy_lambda, 
-                                                use_ml_loss=(not args.policy_only), 
+                                                use_ml_loss=use_ml_loss, 
                                                 ctc_merge_repeated=args.ctc_merge_repeated)
 
         model.compile(optimizer=optimizer, loss=loss_fn, metrics=[EditDistance()])
@@ -236,10 +242,8 @@ if __name__ == '__main__':
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
-    parser.add_argument('--policy_loss', action='store_true', help='Use loss that incorporates policy gradient')
-    parser.add_argument('--policy_baseline', action='store_true', help='Use greedy decoding as baseline for policy gradient')
+    parser.add_argument('--loss', choices=['ml','ml_policy','ml_policy_baseline','policy_baseline','policy'], default='ml', help='Loss function for training')
     parser.add_argument('--policy_lambda', type=float, default=1, help='Weight given to policy gradient loss')
-    parser.add_argument('--policy_only', action='store_true', help='Only use policy gradient loss, no maximum likelihood')
     parser.add_argument('--policy_skip_epochs', type=int, default=0, help='Only start policy gradient after first N epochs')
     
     # architecture options
