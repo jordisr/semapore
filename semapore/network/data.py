@@ -1,8 +1,11 @@
 import os
 import sys
 import glob
+import h5py
+from tqdm import tqdm
 from multiprocessing import Pool
 import numpy as np
+import pandas as pd
 import mappy
 import tensorflow as tf
 
@@ -93,7 +96,7 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
         r2q = max(r2q)-r2q[::-1]
         q2r = max(q2r)-q2r[::-1]
 
-    print("Identity:{} Strand:{}".format(hit.mlen/hit.blen, hit.strand), file=sys.stderr)
+    #print("Identity:{} Strand:{}".format(hit.mlen/hit.blen, hit.strand), file=sys.stderr)
 
     draft_window_sequences = []
     ref_window_sequences = []
@@ -184,7 +187,7 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     #if reference and not aligner:
     #    aligner = mp.Aligner(reference, preset='map-ont', n_threads=1)
 
-    print("Moving to draft: {}".format(draft), file=sys.stderr)
+    #print("Moving to draft: {}".format(draft), file=sys.stderr)
     draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, hit)
 
     draft_input = draft_input[ref_windows]
@@ -204,8 +207,11 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
         draft_sequences=draft_sequences,
         ref_name=ref_name)
 
-    # save windows where draft and reference aren't identitcal
+    # save windows where draft and reference aren't identical
     ref_is_diff =  ~(ref_sequences == draft_sequences)
+    #print(np.sum(ref_is_diff), file=sys.stderr)
+    #print(ref_sequences[0])
+    #print(draft_sequences[0])
     if ref_is_diff.any():
         outfile = "{}.errors.npz".format(out)
         np.savez_compressed(outfile,
@@ -228,6 +234,9 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
             ref_sequences=ref_sequences[~ref_is_diff],
             draft_sequences=draft_sequences[~ref_is_diff],
             ref_name=ref_name)
+
+    row = [os.path.dirname(draft).split('/')[-1], np.sum(ref_is_diff), len(draft_input)-np.sum(ref_is_diff)] + list(ref_name)
+    return row
 
 class TrainingDataHelper:
     def __init__(self, draft, alignment, reads, reference, trimmed_reads="", out="training", window=64, max_time=80):
@@ -253,7 +262,8 @@ class TrainingDataHelper:
                 window=self.window,
                 max_time=self.max_time)
         except:
-            pass
+            print("WARNING: Caught error with {}".format(os.path.basename(f)))
+            return [os.path.basename(f)] + [None] * 9
 
 class AlignmentCopy:
     # pickleable version of mappy.Alignment
@@ -291,16 +301,16 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
     hits = []
 
     if threads > 1:
-        aligner = mappy.Aligner(reference, preset='map-ont', n_threads=threads)
+        aligner = mappy.Aligner(reference, preset='map-ont', n_threads=1)
         training_input = []
-        for f in files:
+        print("aligning to reference...", file=sys.stderr)
+        for f in tqdm(files):
             draft_path = "{}/{}".format(f, draft)
             seqs = semapore.util.load_fastx(draft_path, "fasta")
             if len(seqs) > 0 and len(seqs[0][1]) > 0 :
                 hit = AlignmentCopy(aligner, next(aligner.map(seqs[0][1], cs=True)))
                 training_input.append((f, hit))
 
-        #print(len(training_input))
         training_helper = TrainingDataHelper(
                             out=out,
                             reference=reference,
@@ -310,9 +320,13 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
                             reads=reads,
                             window=window,
                             max_time=max_time)
-
+        print("starting multiprocessing...", file=sys.stderr)
         with Pool(processes=threads) as pool:
-            pool.map(training_helper, training_input, chunksize=20)
+            #map_output = pool.map(training_helper, training_input, chunksize=20)
+            map_output = list(tqdm(pool.imap(training_helper, training_input, chunksize=20), total=len(training_input)))
+            #map_output = pool.imap(training_helper, training_input, chunksize=20)
+        map_output = pd.DataFrame(map_output, columns=['name','num_diff','num_same','genome','strand','identity','query_start','query_end','ref_start','ref_end'])
+        map_output.to_csv(os.path.join(out,"log.csv"), index=False)
     else:
         aligner = mappy.Aligner(reference, preset='map-ont')
 
@@ -435,3 +449,184 @@ def generator_dataset_from_files(files):
                                                             tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)))
 
     return ds
+
+def generator_dataset_from_hdf5(files):
+    """Create dataset from generator
+
+    Args:
+        files (list): *.hdf5 files
+
+    Returns:
+        tf.data.Dataset: dataset of zipped inputs and labels
+    """
+
+    def hdf5_gen(files_):
+        for f in files_:
+            h5 = h5py.File(f, 'r')
+            for group in h5:
+                training_data = h5[group]
+                x1 = np.array(training_data['signal_input'], dtype=np.float32)
+                x2 = np.array(training_data['sequence_input'], dtype=np.int32)
+                x3 = np.array(training_data['draft_input'], dtype=np.int32)
+                labels = np.array(training_data['ref_sequences'])
+
+                for d in zip(x1,x2,x3,labels):
+                    x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[0], axis=3), ragged_rank=2)
+                    x2_ = tf.RaggedTensor.from_tensor(d[1])
+                    x3_ = tf.RaggedTensor.from_tensor(tf.expand_dims(d[2], axis=0))
+                    label =[{'A':0,'C':1,'G':2,'T':3}[i] for i in d[-1].decode('utf-8')]
+                    label = tf.cast(tf.RaggedTensor.from_row_lengths(label, row_lengths=[len(label)]), tf.int32)
+
+                    yield ((x1_, x2_, x3_), label)
+
+    ds = tf.data.Dataset.from_generator(hdf5_gen,
+                                         args=[files],
+                                         output_signature=((tf.RaggedTensorSpec(shape=(None,None,None, 1), ragged_rank=2, dtype=tf.float32),
+                                                            tf.RaggedTensorSpec(shape=(None,None), dtype=tf.int32),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)
+                                                            ),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)))
+
+    return ds
+
+def merge_npz_to_hdf5(npz_files, name, target_size=100, compression=None):
+    numeric_keys = ['draft_input', 'sequence_input', 'signal_input', 'signal_mask']
+    string_keys = ['files', 'ref_sequences', 'draft_sequences', 'ref_name']
+    
+    file_sizes = np.array([os.path.getsize(x)/1024**2 for x in npz_files])
+    size_bins = np.floor(np.cumsum(file_sizes) / target_size).astype(int)
+    size_bin_end = np.unique(size_bins, return_index=True)[1][1:]
+    num_digits = len(str(size_bins[-1]))
+    print("Merging {} NPZ files into {} HDF5 files...".format(len(file_sizes), size_bins[-1]), file=sys.stderr)
+    
+    range_start = 0
+    for i,range_end in enumerate(tqdm(size_bin_end)):
+        h5_path = "{name}.{num:0{num_digits}}.hdf5".format(name=name, num=i, num_digits=num_digits)
+        with h5py.File(h5_path, "w") as h5_f:
+            for f in npz_files[range_start:range_end]:
+                grp = h5_f.create_group(os.path.basename(f))
+                with np.load(f) as data:
+                    for k in numeric_keys:
+                        grp.create_dataset(k, data=data[k], compression=compression)
+                    for k in string_keys:
+                        grp.create_dataset(k, data=list(data[k]), dtype=h5py.string_dtype(encoding='utf-8'), compression=compression)
+        range_start = range_end
+
+def feature_from_tensor(tensor):
+    # for serialization into TFRecords
+    serialized_tensor = tf.io.serialize_tensor(tensor)
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[serialized_tensor.numpy()]))
+
+def write_serialized_examples_from_hdf5(files):
+    # writes one TFRecord file per HDF5 file
+    # TODO: combine with merge_npz_to_hdf5 to skip generation of HDF5 intermediates
+    for f in files:
+        out_path = "{}.tfrecord".format(os.path.splitext(f)[0])
+        with tf.io.TFRecordWriter(out_path) as file_writer:
+            h5 = h5py.File(f, 'r')
+            for group in h5:
+                training_data = h5[group]
+                x1 = training_data['signal_input'].astype(np.float32)
+                x2 = training_data['sequence_input'].astype(np.int32)
+                x3 = training_data['draft_input'].astype(np.int32)
+                labels = training_data['ref_sequences']
+
+                for x1_, x2_, x3_, labels_ in zip(x1,x2,x3,labels):
+
+                    label_values = [{'A':0,'C':1,'G':2,'T':3}[i] for i in labels_.decode('utf-8')]
+                    label_length = [len(label_values)]
+
+                    features_for_example = {"signal_input": feature_from_tensor(x1_),
+                                            "sequence_input": feature_from_tensor(x2_),
+                                            "draft_input": feature_from_tensor(x3_),
+                                            "label_values": feature_from_tensor(label_values),
+                                            "label_lengths": feature_from_tensor(label_length)}
+
+                    example = tf.train.Example(features=tf.train.Features(feature=features_for_example))
+                    file_writer.write(example.SerializeToString())
+
+def make_decoder(stride=1):
+    @tf.function
+    def decode_tfrecord(x):
+        # map over TFRecordDataset to get tensors
+        feature_schema = {"signal_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "signal_mask": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "sequence_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "draft_input": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "label_values": tf.io.FixedLenFeature([], dtype=tf.string),
+                        "label_lengths": tf.io.FixedLenFeature([], dtype=tf.string)}
+        
+        parsed_example = tf.io.parse_single_example(x, features=feature_schema)
+        
+        signal_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['signal_input'], tf.float32), (None, None, None))
+        signal_mask_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['signal_mask'], tf.bool), (None, None,None))
+        sequence_tensor = tf.ensure_shape(tf.io.parse_tensor(parsed_example['sequence_input'], tf.int32), (None, None))
+        draft_tensor = tf.io.parse_tensor(parsed_example['draft_input'], tf.int32)
+        labels = tf.ensure_shape(tf.io.parse_tensor(parsed_example['label_values'], tf.int32), (None,))
+        
+        signal_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(signal_tensor, axis=3), ragged_rank=2)
+        signal_mask_tensor = tf.RaggedTensor.from_tensor(signal_mask_tensor, ragged_rank=1)
+        sequence_tensor = tf.RaggedTensor.from_tensor(sequence_tensor)
+        draft_tensor = tf.RaggedTensor.from_tensor(tf.expand_dims(draft_tensor, axis=0))
+
+        return ((signal_tensor, signal_mask_tensor[:,:,::stride], sequence_tensor, draft_tensor), labels)
+    return decode_tfrecord
+
+def dataset_from_arrays(signal, signal_mask, sequence, draft):
+    # takes ndarrays returned by featurize_inputs()
+    # return a tf.data.Dataset
+    # ndarray -> RaggedTensor -> Tensor wasn't working for forward pass (to_tensor() raising error)
+    # generator ensures correct types for input to network
+
+    def gen(signal, signal_mask, sequence, draft):
+        for x in zip(signal, signal_mask, sequence, draft):
+            x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(tf.cast(x[0], tf.float32), axis=3), ragged_rank=2)
+            x2_ = tf.RaggedTensor.from_tensor(tf.cast(x[1], tf.bool), ragged_rank=2)
+            x3_ = tf.RaggedTensor.from_tensor(tf.cast(x[2], tf.int32))
+            x4_ = tf.RaggedTensor.from_tensor(tf.expand_dims(tf.cast(x[3], tf.int32), axis=0))
+
+            yield x1_, x2_, x3_, x4_
+
+    ds = tf.data.Dataset.from_generator(gen,
+                                         args=[signal, signal_mask, sequence, draft],
+                                         output_signature=((tf.RaggedTensorSpec(shape=(None,None,None, 1), ragged_rank=2, dtype=tf.float32),
+                                                            tf.RaggedTensorSpec(shape=(None,None,None), ragged_rank=2, dtype=tf.bool),
+                                                            tf.RaggedTensorSpec(shape=(None,None), dtype=tf.int32),
+                                                            tf.RaggedTensorSpec(shape=(1,None), ragged_rank=1, dtype=tf.int32)
+                                                            )))
+
+    return ds
+
+def write_serialized_from_npz(npz_files, name, num_files=10):    
+    file_sizes = np.array([os.path.getsize(x)/1024**2 for x in npz_files])
+    size_bins = np.floor(np.cumsum(file_sizes) / (np.sum(file_sizes)/num_files)).astype(int)
+    size_bin_end = np.unique(size_bins, return_index=True)[1][1:]
+    num_digits = len(str(size_bins[-1]-1)) # files are 0-indexed i.e. only need 1 digit for 0-9
+    
+    range_start = 0
+    for i,range_end in enumerate(tqdm(size_bin_end)):
+        out_path = "{name}.{num:0{num_digits}}.tfrecord".format(name=name, num=i, num_digits=num_digits)
+        with tf.io.TFRecordWriter(out_path) as file_writer:
+            for f in npz_files[range_start:range_end]:                
+                with np.load(f) as data:
+                    x1 = data['signal_input'].astype(np.float32)
+                    x2 = data['signal_mask'].astype(bool)
+                    x3 = data['sequence_input'].astype(np.int32)
+                    x4 = data['draft_input'].astype(np.int32)
+                    labels = data['ref_sequences']
+
+                    for x1_, x2_, x3_, x4_, labels_ in zip(x1,x2,x3,x4,labels):
+
+                        label_values = [{'A':0,'C':1,'G':2,'T':3}[i] for i in labels_]
+                        label_length = [len(label_values)]
+
+                        features_for_example = {"signal_input": feature_from_tensor(x1_),
+                                                "signal_mask": feature_from_tensor(x2_),
+                                                "sequence_input": feature_from_tensor(x3_),
+                                                "draft_input": feature_from_tensor(x4_),
+                                                "label_values": feature_from_tensor(label_values),
+                                                "label_lengths": feature_from_tensor(label_length)}
+
+                        example = tf.train.Example(features=tf.train.Features(feature=features_for_example))
+                        file_writer.write(example.SerializeToString())
+        range_start = range_end

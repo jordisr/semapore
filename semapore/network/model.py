@@ -1,10 +1,22 @@
 import tensorflow as tf
 import numpy as np
 
+class EmptyLayer(tf.keras.layers.Layer):
+    # layer to stop propagation of mask, not sure if needed
+    def __init__(self, **kwargs):
+        super(EmptyLayer, self).__init__(**kwargs)
+        self.supports_masking = False
+
+    def call(self, inputs):
+        return inputs
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
 def TimeDistributed2D(layer, name=None):
     return tf.keras.layers.TimeDistributed(tf.keras.layers.TimeDistributed(layer), name=name)
 
-def SignalEmbedding(output_dim, params={}):
+def SignalEmbedding(output_dim, mask=True, params={}):
 
     conv1d = tf.keras.layers.Conv1D(filters=params.get('conv1d_filters', 32),
                                     kernel_size=params.get('conv1d_kernel_size', 3),
@@ -14,17 +26,42 @@ def SignalEmbedding(output_dim, params={}):
                                    name= "Conv1D")
 
     rnn = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(output_dim//2, return_sequences=False))
+    clear_mask = EmptyLayer(name="clear")
 
     inputs = tf.keras.Input(shape=(None, 1))
+    signal_mask = tf.keras.Input(shape=(None,), dtype=bool)
+
     x = conv1d(inputs)
-    outputs = rnn(x)
+    if mask:
+        x = rnn(x, mask=signal_mask)
+        x = clear_mask(x)
+    else:
+        x = rnn(x)
 
-    return  tf.keras.Model(inputs=inputs, outputs=outputs)
+    return  tf.keras.Model(inputs=[inputs, signal_mask], outputs=x)
 
-def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, use_draft=False):
+def RnnModel(input_dim, output_dim, num_layers=1, reduce_dim=True, name=None):
+    inputs = tf.keras.Input(shape=(None, input_dim))
+    x = inputs
+    if reduce_dim:
+        for i in range(num_layers-1):
+            x =  tf.keras.layers.Bidirectional(tf.keras.layers.GRU(output_dim // 2, return_sequences=True))(x)
+        x = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(output_dim // 2, return_sequences=False))(x)
+    else:
+        for i in range(num_layers):
+            x =  tf.keras.layers.Bidirectional(tf.keras.layers.GRU(output_dim // 2, return_sequences=True))(x)
+    
+    return tf.keras.Model(inputs=inputs, outputs=x, name=name)
+
+def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_sequence=True, use_signal=False, use_draft=False, num_row_layers=1, num_col_layers=1):
+    assert use_sequence or use_signal or use_draft, "Must specify at least one input"
+
     # convert tf.RaggedTensor inputs to tensors
     signal_input = tf.keras.Input(shape=(None, None, None, 1), ragged=True, name="SignalInput")
     signal_input_tensor = signal_input.to_tensor()
+
+    signal_mask_input = tf.keras.Input(shape=(None, None, None), ragged=True, name="SignalMaskInput")
+    signal_mask_input_tensor = signal_mask_input.to_tensor()
 
     alignment_input = tf.keras.Input(shape=(None, None), ragged=True, name="AlignmentInput")
     alignment_input_tensor = alignment_input.to_tensor()
@@ -45,13 +82,13 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, us
     # encode and summarize column information
     # input: (batch_size, num_columns, num_rows, input_dim)
     # output: (batch_size, num_columns, encoder_dim)
-    rnn_1 = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(encoder_dim // 2, return_sequences=False))
-    rnn_1_td = tf.keras.layers.TimeDistributed(rnn_1, name="ColumnEncoder")
+    col_embedding = RnnModel(input_dim=(signal_dim*use_signal + seq_dim*use_sequence), output_dim=encoder_dim, num_layers=num_col_layers, reduce_dim=True)
+    col_embedding_td = tf.keras.layers.TimeDistributed(col_embedding, name="ColumnEncoder")
 
     # encode row information
     # input: (batch_size, num_columns, encoder_dim)
     # output: (batch_size, num_columns, encoder_dim)
-    rnn_2 = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(encoder_dim // 2, return_sequences=True), name="RowEncoder")
+    row_embedding = RnnModel(input_dim=encoder_dim, output_dim=encoder_dim, num_layers=num_row_layers, reduce_dim=False, name="RowEncoder")
 
     # input: (batch_size, num_columns, encoder_dim)
     # output: (batch_size, num_columns, output_dim=5)
@@ -59,19 +96,26 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_signal=False, us
 
     # put layers together
     if use_signal:
-        x1 = signal_embedding(signal_input_tensor)
-        x2 = char_embedding(alignment_input_tensor)
-        x = tf.concat([x1, x2], axis=3)
+        signal_embedding_output = signal_embedding([signal_input_tensor, signal_mask_input_tensor])
+
+    if use_sequence:
+        seq_embedding_output = char_embedding(alignment_input_tensor)
+
+    if use_signal and use_sequence:
+        x = tf.concat([signal_embedding_output, seq_embedding_output], axis=3)
     else:
-        x = char_embedding(alignment_input_tensor)
-    x = rnn_1_td(x)
-    x = rnn_2(x)
+        x = (signal_embedding_output if use_signal else seq_embedding_output)
+
+    x = col_embedding_td(x)
+    x = row_embedding(x)
+
     if use_draft:
+        # draft concatenated in at the end
         draft_embedding = char_embedding(draft_input_tensor)
         x = tf.concat([x, draft_embedding], axis=2)
     outputs = dense(x)
 
     model_name = ("draft_" if use_draft else "") + ("sequence_signal" if use_signal else "sequence")
-    model = tf.keras.Model(inputs=[signal_input, alignment_input, draft_input], outputs=outputs, name=model_name)
+    model = tf.keras.Model(inputs=[signal_input, signal_mask_input, alignment_input, draft_input], outputs=outputs, name=model_name)
 
     return model
