@@ -56,10 +56,9 @@ def train_model(args):
                     'signal_dim',
                     'encoder_dim',
                     'error_fraction',
-                    'policy_loss',
-                    'policy_baseline',
+                    'loss',
                     'policy_lambda',
-                    'policy_only',
+                    'policy_skip_epochs',
                     'architecture',
                     'error_fraction']
         wandb_config = {}
@@ -149,7 +148,6 @@ def train_model(args):
 
     with strategy.scope():
         # get the neural network architecture model
-        # TODO: specify hyperparameters with JSON/YAML file?
         model = semapore.network.build_model(
             seq_dim=args.seq_dim, 
             signal_dim=args.signal_dim, 
