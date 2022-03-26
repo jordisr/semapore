@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import argparse
 import datetime
@@ -44,7 +45,7 @@ def train_model(args):
     # initialize W&B run
     # TODO: use single config dict that is passed to W&B
     if args.wandb:
-        wandb.init(project="semapore", entity="jordisr")
+        wandb.init(project="semapore", entity="jordisr", name=args.name)
         wandb_log = ['epochs',
                     'seed',
                     'batch_size',
@@ -69,7 +70,10 @@ def train_model(args):
         wandb.config.update(wandb_config)
         run_name = wandb.run.name
     else:
-        run_name = args.architecture + '_' + args.name
+        if args.name:
+            run_name = args.architecture + '_' + args.name
+        else:
+            run_name = args.architecture
     
     # directory for model checkpoints and logging
     out_dir = "{}.{}".format(run_name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"))
@@ -78,6 +82,7 @@ def train_model(args):
 
     # log all command line arguments
     log_file = open(out_dir+'/train.log','w')
+    print(' '.join(sys.argv),file=log_file)
     print('Command-line arguments:',file=log_file)
     for k,v in args.__dict__.items():
         print(k,'=',v, file=log_file)
@@ -180,17 +185,19 @@ def train_model(args):
         # callbacks for training
         os.makedirs(os.path.join(out_dir, "checkpoints"))
         model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(os.path.join(out_dir, "checkpoints", "{epoch:02d}.hdf5"), save_freq='epoch', save_weights_only=True)
-        early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor="val_loss", min_delta=1e-3, patience=3, verbose=1)
         tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq='epoch')
         #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq=50, profile_batch='50,100')
         terminante_on_nan_callback = tf.keras.callbacks.TerminateOnNaN()
         csv_logger_callback = tf.keras.callbacks.CSVLogger(os.path.join(out_dir,'train.csv'), separator=',', append=False)
 
         callbacks = [model_checkpoint_callback,
-                    early_stopping_callback,
                     tensorboard_callback,
                     terminante_on_nan_callback,
                     csv_logger_callback]
+
+        if args.early_stopping:
+            early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor=args.early_stopping, min_delta=0, patience=5, verbose=1, restore_best_weights=True)
+            callbacks.append(early_stopping_callback)
 
         if args.wandb:
             callbacks.append(WandbCallback())
@@ -224,7 +231,7 @@ if __name__ == '__main__':
     # general options
     parser = argparse.ArgumentParser(description='Train new Semapore model')
     parser.add_argument('--data', help='Path to training files in compressed hdf5 format', required=True)
-    parser.add_argument('--name', default='run', help='Name of run')
+    parser.add_argument('--name', default=None, help='Name of run')
     parser.add_argument('--epochs', type=int, default=1, help='Number of epochs to train on')
     parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training (default: train on all available GPUs)')
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
@@ -239,6 +246,7 @@ if __name__ == '__main__':
     parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set (if --validation not specified)')
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
+    parser.add_argument('--early_stopping', default=None, choices=["val_loss", "val_edit_distance"], help='Stop training when metric stops decreasing')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
     parser.add_argument('--loss', choices=['ml','ml_policy','ml_policy_baseline','policy_baseline','policy'], default='ml', help='Loss function for training')
     parser.add_argument('--policy_lambda', type=float, default=1, help='Weight given to policy gradient loss')
