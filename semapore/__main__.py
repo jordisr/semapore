@@ -67,11 +67,16 @@ def main():
     if args.gpu:
         device = '/gpu:{}'.format(args.gpu)
     else:
-        device = '/gpu:0' if tf.test.is_gpu_available() else 'cpu'
+        gpu_list = tf.config.list_physical_devices('GPU')
+        if len(gpu_list) > 0:
+            device = '/gpu:0'
+        else: 
+            device = 'cpu'
             
     with tf.device(device):
 
-        ds = semapore.network.dataset_from_arrays(signal_input, signal_input_mask, sequence_input, draft_input)
+        # TODO: parse stride from model configuration
+        ds = semapore.network.dataset_from_arrays(signal_input, signal_input_mask, sequence_input, draft_input, stride=5)
         logits = []
         for x in ds.batch(32):
             logits.append(model.predict_on_batch(x))

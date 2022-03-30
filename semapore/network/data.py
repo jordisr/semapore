@@ -572,7 +572,7 @@ def make_decoder(stride=1):
         return ((signal_tensor, signal_mask_tensor[:,:,::stride], sequence_tensor, draft_tensor), labels)
     return decode_tfrecord
 
-def dataset_from_arrays(signal, signal_mask, sequence, draft):
+def dataset_from_arrays(signal, signal_mask, sequence, draft, stride=1):
     # takes ndarrays returned by featurize_inputs()
     # return a tf.data.Dataset
     # ndarray -> RaggedTensor -> Tensor wasn't working for forward pass (to_tensor() raising error)
@@ -581,7 +581,7 @@ def dataset_from_arrays(signal, signal_mask, sequence, draft):
     def gen(signal, signal_mask, sequence, draft):
         for x in zip(signal, signal_mask, sequence, draft):
             x1_ = tf.RaggedTensor.from_tensor(tf.expand_dims(tf.cast(x[0], tf.float32), axis=3), ragged_rank=2)
-            x2_ = tf.RaggedTensor.from_tensor(tf.cast(x[1], tf.bool), ragged_rank=2)
+            x2_ = tf.RaggedTensor.from_tensor(tf.cast(x[1][:,:,::stride], tf.bool), ragged_rank=2)
             x3_ = tf.RaggedTensor.from_tensor(tf.cast(x[2], tf.int32))
             x4_ = tf.RaggedTensor.from_tensor(tf.expand_dims(tf.cast(x[3], tf.int32), axis=0))
 
