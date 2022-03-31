@@ -1,13 +1,10 @@
 import numpy as np
-from scipy.stats import norm
-
-from .pileup import replace_tuple
 
 def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=False, draft_first=False):
     """Generate padded input features from the raw signal and reads-to-assembly alignment
 
     Args:
-        pileup (DataFrame): output of get_pileup_alignment()
+        pileup (Pileup)
         reads (dict): output of get_fast5_reads()
         window_size (int): number of pileup alignment columns per input
         max_time (int): max signal/event size, larger ones will be truncated
@@ -24,20 +21,12 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
             [?, 2]
     """
 
-    num_columns = pileup.shape[0]
-    num_reads = pileup.shape[1]
-    read_names = list(pileup.columns)
-
-    if draft_first:
-        read_names = read_names[1:]
-        num_reads -= 1
-
     # TODO: dynamically resize if it exceeds?
     # TODO: add in padding for last incomplete batch
-    # num_reads is total number of reads, possibly impractical for large assemblies
-    signal_data = np.zeros((num_columns // window_size, window_size, num_reads, max_time), dtype=np.float32)
-    signal_mask = np.zeros((num_columns // window_size, window_size, num_reads, max_time), dtype=bool)
-    window_bounds = np.zeros((num_columns // window_size, 2), dtype=np.int32)
+    # using total number of reads is possibly impractical for genome-level assemblies
+    signal_data = np.zeros((pileup.n_columns // window_size, window_size, pileup.n_reads, max_time), dtype=np.float32)
+    signal_mask = np.zeros((pileup.n_columns // window_size, window_size, pileup.n_reads, max_time), dtype=bool)
+    window_bounds = np.zeros((pileup.n_columns // window_size, 2), dtype=np.int32)
     sequence_data = []
 
     # same padding across all windows, saves hassle of nested RaggedTensor
@@ -48,11 +37,10 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
 
     num_signals_processed = 0
     num_over_maxtime = 0
-    while col+window_size < num_columns:
+    while col+window_size < pileup.n_columns:
         sequence_cols = []
 
-        # should this be done here or automatically from get_pileup_alignment()?
-        pileup_window = pileup.iloc[col:col+window_size].applymap(replace_tuple).to_numpy()
+        pileup_window = pileup.pileup.iloc[col:col+window_size].to_numpy()
 
         # can we use more vectorization?
         for i in range(window_size):
@@ -60,7 +48,7 @@ def featurize_inputs(pileup, reads, window_size=100, max_time=150, trim_down=Fal
             sequence_cols.append(alignment_column)
             alignment_idx = np.array([x[0] for x in pileup_window[i]])
 
-            for j, read_id in enumerate(read_names):
+            for j, read_id in enumerate(pileup.reads):
                 if alignment_column[j+draft_first] > 2: # A,C,G,T,a,c,g,t
 
                     # alignment index => basecall sequence index

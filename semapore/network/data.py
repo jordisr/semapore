@@ -65,11 +65,11 @@ def get_alignment_coord(cs):
 
     return [np.array(r2q), np.array(q2r)]
 
-def get_reference_sequences(draft_pileup, window_bounds, hit):
+def get_reference_sequences(pileup, window_bounds, hit):
     """Get true labels by aligning draft to reference
 
     Args:
-        draft_pileup (Series): draft column from pileup DataFrame
+        pileup (Pileup)
         window_bounds (ndarray): 2D array from featurize_inputs()
         aligner (mappy.Aligner): aligner to reference genome
 
@@ -81,7 +81,8 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
     """
 
     # extract draft sequence from parsed pileup
-    draft_sequence = ''.join([x[1] for x in draft_pileup if type(x) == tuple])
+    draft_pileup = pileup.pileup[pileup.ref_id]
+    draft_sequence = ''.join([['','','','A','C','G','T','A','C','G','T'][x[1]] for x in draft_pileup])
 
     # get first hit from alignment(s) to reference
     #hit = next(aligner.map(draft_sequence, cs=True))
@@ -121,8 +122,8 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
                 i -= 1
             draft_end = draft_pileup_window[i][0]
         except IndexError:
-            # TODO: log these exceptions
             # skip sections with all inserts for draft sequence
+            print("Warning: all inserts for draft, window {}, alignment={}".format(window_idx, pileup.alignment),  file=sys.stderr)
             continue
 
         # check this chunk of draft contained in alignment to ref
@@ -141,7 +142,9 @@ def get_reference_sequences(draft_pileup, window_bounds, hit):
                 #print("{}\t{}..{}\t{}..{}".format(hit.strand, this_draft_seq[:10],this_draft_seq[-10:], this_ref_seq[:10],this_ref_seq[-10:]), file=sys.stderr)
 
             else:
-                print("Warning: window {}, draft_len={} ref_len={}".format(window_idx, len(this_draft_seq), len(this_ref_seq)),  file=sys.stderr)
+                print("Warning: bad chunk, window {}, draft_len={} ref_len={}, alignment={}".format(window_idx, len(this_draft_seq), len(this_ref_seq), pileup.alignment),  file=sys.stderr)
+        else:
+            print("Warning: draft not contained in ref, window {}, alignment={}".format(window_idx, pileup.alignment),  file=sys.stderr)
 
     return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
 
@@ -161,16 +164,13 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     """
 
     # load alignment
-    pileup = semapore.util.get_pileup_alignment(alignment=alignment, reference=draft)
-    draft_id = pileup.columns[0]
-    draft_pileup = pileup[draft_id]
-    pileup_reads = list(pileup.columns)[1:]
+    pileup = semapore.util.Pileup(alignment=alignment, reference=draft)
 
     # load reads
     if type(reads) is str:
-        reads = semapore.util.get_reads(pileup_reads, dir=reads)
+        reads = semapore.util.get_reads(pileup.reads, dir=reads)
     elif type(reads) is dict:
-        reads = semapore.util.get_reads(pileup_reads, paths=reads)
+        reads = semapore.util.get_reads(pileup.reads, paths=reads)
     else:
         sys.exit("No reads provided!")
 
@@ -188,8 +188,9 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", aligner=Non
     #    aligner = mp.Aligner(reference, preset='map-ont', n_threads=1)
 
     #print("Moving to draft: {}".format(draft), file=sys.stderr)
-    draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(draft_pileup, window_bounds, hit)
+    draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(pileup, window_bounds, hit)
 
+    print("{}: {} out of {} windows for training data".format(alignment, len(ref_windows), len(window_bounds)))
     draft_input = draft_input[ref_windows]
     sequence_input = sequence_input[ref_windows]
     signal_input = signal_input[ref_windows]
@@ -297,8 +298,7 @@ def make_training_dir(pattern, draft, alignment, reads, reference, trimmed_reads
     os.makedirs(out)
     #aligner = mp.Aligner(reference, preset='map-ont', n_threads=1)
     #files = [(f, aligner) for f in glob.glob(pattern)]
-    files = glob.glob(pattern)
-    hits = []
+    files = glob.glob(pattern)[:100]
 
     if threads > 1:
         aligner = mappy.Aligner(reference, preset='map-ont', n_threads=1)

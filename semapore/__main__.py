@@ -26,17 +26,15 @@ def main():
     if args.draft:
         (ref_id, ref_seq) = semapore.util.load_fastx(args.draft, "fasta")[0]
 
-    # load alignment
-    pileup = semapore.util.get_pileup_alignment(alignment=args.alignment, reference=args.draft)
-    draft_id = pileup.columns[0]
-    pileup_reads = list(pileup.columns)[1:]
+   # build pileup from alignment
+    pileup = semapore.util.Pileup(alignment=args.alignment, reference=args.draft)
 
     # load reads
     if args.nested_reads:
         reads_table = semapore.util.find_nested_reads(args.reads)
-        reads = semapore.util.get_reads(pileup_reads, paths=reads_table)
+        reads = semapore.util.get_reads(pileup.reads, paths=reads_table)
     else:
-        reads = semapore.util.get_reads(pileup_reads, dir=args.reads)
+        reads = semapore.util.get_reads(pileup.reads, dir=args.reads)
 
     # load trimmed read sequences
     if args.trimmed_reads:
@@ -87,7 +85,7 @@ def main():
     decoded_seq = ''.join([''.join(np.take(np.array(['A','C','G','T']), x)) for x in decoded_labels])
 
     # output polish sequence in FASTA format
-    print(semapore.util.fasta_format(draft_id+"_semapore", decoded_seq))
+    print(semapore.util.fasta_format(pileup.alignment, decoded_seq))
 
 if __name__ == "__main__":
     main()

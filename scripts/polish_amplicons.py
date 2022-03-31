@@ -70,20 +70,15 @@ def main():
         reads_table = semapore.util.find_nested_reads(args.reads)
 
     for dir_ in tqdm(dirs):
-        # load draft sequence (seq also in pileup)
-        if args.draft:
-            (ref_id, ref_seq) = semapore.util.load_fastx(os.path.join(dir_, args.draft), "fasta")[0]
 
-        # load alignment
-        pileup = semapore.util.get_pileup_alignment(alignment=os.path.join(dir_, args.alignment), reference=os.path.join(dir_, args.draft))
-        draft_id = pileup.columns[0]
-        pileup_reads = list(pileup.columns)[1:]
+        # build pileup from alignment
+        pileup = semapore.util.Pileup(alignment=os.path.join(dir_, args.alignment), reference=os.path.join(dir_, args.draft))
 
         # load these reads
         if args.nested_reads:
-            reads = semapore.util.get_reads(pileup_reads, paths=reads_table)
+            reads = semapore.util.get_reads(pileup.reads, paths=reads_table)
         else:
-            reads = semapore.util.get_reads(pileup_reads, dir=args.reads)
+            reads = semapore.util.get_reads(pileup.reads, dir=args.reads)
 
 
         # load trimmed read sequences
