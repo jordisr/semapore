@@ -1,9 +1,5 @@
 import argparse
-import sys
-import os
 import glob
-import pickle
-import mappy
 
 from semapore.network import make_training_dir
 from semapore.util import find_nested_reads
@@ -30,8 +26,14 @@ def main():
     else:
         reads = args.reads
 
+    if '*' in args.pattern:
+        dirs = glob.glob(args.pattern)
+    else:
+        with open(args.pattern, 'r') as f:
+            dirs = [l.strip('\n') for l in f]
+        
     make_training_dir(
-                    args.pattern,
+                    dirs,
                     draft=args.draft,
                     alignment=args.alignment,
                     reads=reads,
