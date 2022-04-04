@@ -13,8 +13,8 @@ def main():
     parser = argparse.ArgumentParser(description='Run polishing on multiple amplicon bins', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('--pattern', help='Pattern to match directories', default=None)
-    parser.add_argument('--names', help='List of directories', default=None)
-    parser.add_argument('--base', help='Base directory with --names', default=None)
+    parser.add_argument('--names', help='File with list of directories', default=None)
+    parser.add_argument('--base', help='Base directory with --names', default='')
     parser.add_argument('-d','--draft', required=True, help='Draft assembly sequence (FASTA)', default=argparse.SUPPRESS)
     parser.add_argument('-a','--alignment', required=True, help='Reads aligned to draft assembly (BAM)', default=argparse.SUPPRESS)
     parser.add_argument('-r','--reads', required=True, help='Directory of basecalled reads (FAST5)', default=argparse.SUPPRESS)

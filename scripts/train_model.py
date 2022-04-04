@@ -56,12 +56,11 @@ def train_model(args):
                     'seq_dim', 
                     'signal_dim',
                     'encoder_dim',
-                    'error_fraction',
                     'loss',
                     'policy_lambda',
                     'policy_skip_epochs',
                     'architecture',
-                    'error_fraction']
+                    'set_error_fraction']
         wandb_config = {}
         for param in wandb_log:
             wandb_config[param] = getattr(args, param)
@@ -106,23 +105,27 @@ def train_model(args):
         strategy = tf.distribute.OneDeviceStrategy(device=train_devices[0])
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
-    # load training data
+    # load training datas
     decoder_fn = semapore.network.make_decoder(5)
-    training_files_errors = glob.glob(os.path.join(args.data, "errors.*.tfrecord"))    
-    errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(decoder_fn)
-    print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
 
     # mix training examples with and without errors
-    assert(args.error_fraction > 0 and args.error_fraction <= 1)
-    if args.error_fraction < 1:
-        training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.tfrecord"))
-        noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(decoder_fn)
-        dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
-                                                        weights=[args.error_fraction, 1-args.error_fraction],
-                                                        stop_on_empty_dataset=True)
+    if (args.set_error_fraction > 0) and (args.set_error_fraction <=1):
+        training_files_errors = glob.glob(os.path.join(args.data, "errors.*.tfrecord"))    
+        errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(decoder_fn)
+        print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.set_error_fraction))
+
+        if args.set_error_fraction == 1:
+            dataset = errors_dataset
+        else:
+            training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.tfrecord"))
+            noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(decoder_fn)
+            dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
+                                                            weights=[args.set_error_fraction, 1-args.set_error_fraction],
+                                                            stop_on_empty_dataset=True)
     else:
-        dataset = errors_dataset
-    
+        training_files = glob.glob(os.path.join(args.data, "all.*.tfrecord"))    
+        dataset = tf.data.TFRecordDataset(training_files).map(decoder_fn)
+
     dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True)
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
@@ -230,15 +233,15 @@ def train_model(args):
 if __name__ == '__main__':
     # general options
     parser = argparse.ArgumentParser(description='Train new Semapore model')
-    parser.add_argument('--data', help='Path to training files in compressed hdf5 format', required=True)
+    parser.add_argument('--data', help='Path to training files in serialized TFRecord format', required=True)
     parser.add_argument('--name', default=None, help='Name of run')
     parser.add_argument('--epochs', type=int, default=1, help='Number of epochs to train on')
     parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training (default: train on all available GPUs)')
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
     parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
-    parser.add_argument('--error_fraction', type=float, default=0.5, help='Fraction of training examples with errors to correct')
-    parser.add_argument('--batches', type=int, default=0, help='Only train for N batches (for testing)')    
+    parser.add_argument('--set_error_fraction', type=float, default=0.5, help='Set ratio of examples with/without errors in draft sequence')
+    parser.add_argument('--batches', type=int, default=0, help='Only train for N batches each epoch')    
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
