@@ -4,6 +4,21 @@ import numpy as np
 import pandas as pd
 from Bio import SeqIO
 
+class Pileup:
+    def __init__(self, alignment, reference):
+        self.alignment = alignment
+        self.reference = reference
+
+        self.pileup = get_pileup_alignment(alignment=self.alignment, reference=self.reference)
+        self.pileup = self.pileup.applymap(replace_tuple)
+
+        # assumes reference is first row
+        self.ref_id = self.pileup.columns[0]
+        self.reads = self.pileup.columns[1:]
+
+        self.n_columns = self.pileup.shape[0]
+        self.n_reads = self.pileup.shape[1] - 1
+
 def load_fastx(f, fmt="fasta"):
     # read FASTA/FASTQ into memory
     seqs = []

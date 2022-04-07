@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import argparse
 import datetime
@@ -44,7 +45,7 @@ def train_model(args):
     # initialize W&B run
     # TODO: use single config dict that is passed to W&B
     if args.wandb:
-        wandb.init(project="semapore", entity="jordisr")
+        wandb.init(project="semapore", entity="jordisr", name=args.name)
         wandb_log = ['epochs',
                     'seed',
                     'batch_size',
@@ -55,8 +56,11 @@ def train_model(args):
                     'seq_dim', 
                     'signal_dim',
                     'encoder_dim',
+                    'loss',
+                    'policy_lambda',
+                    'policy_skip_epochs',
                     'architecture',
-                    'error_fraction']
+                    'set_error_fraction']
         wandb_config = {}
         for param in wandb_log:
             wandb_config[param] = getattr(args, param)
@@ -65,7 +69,10 @@ def train_model(args):
         wandb.config.update(wandb_config)
         run_name = wandb.run.name
     else:
-        run_name = args.architecture + '_' + args.name
+        if args.name:
+            run_name = args.architecture + '_' + args.name
+        else:
+            run_name = args.architecture
     
     # directory for model checkpoints and logging
     out_dir = "{}.{}".format(run_name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"))
@@ -74,6 +81,7 @@ def train_model(args):
 
     # log all command line arguments
     log_file = open(out_dir+'/train.log','w')
+    print(' '.join(sys.argv),file=log_file)
     print('Command-line arguments:',file=log_file)
     for k,v in args.__dict__.items():
         print(k,'=',v, file=log_file)
@@ -97,23 +105,27 @@ def train_model(args):
         strategy = tf.distribute.OneDeviceStrategy(device=train_devices[0])
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
-    # load training data
+    # load training datas
     decoder_fn = semapore.network.make_decoder(5)
-    training_files_errors = glob.glob(os.path.join(args.data, "errors.*.tfrecord"))    
-    errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(decoder_fn)
-    print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.error_fraction))
 
     # mix training examples with and without errors
-    assert(args.error_fraction > 0 and args.error_fraction <= 1)
-    if args.error_fraction < 1:
-        training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.tfrecord"))
-        noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(decoder_fn)
-        dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
-                                                        weights=[args.error_fraction, 1-args.error_fraction],
-                                                        stop_on_empty_dataset=True)
+    if (args.set_error_fraction > 0) and (args.set_error_fraction <=1):
+        training_files_errors = glob.glob(os.path.join(args.data, "errors.*.tfrecord"))    
+        errors_dataset = tf.data.TFRecordDataset(training_files_errors).map(decoder_fn)
+        print("Found {} files for training, sampling examples with errors at rate of {}".format(len(training_files_errors), args.set_error_fraction))
+
+        if args.set_error_fraction == 1:
+            dataset = errors_dataset
+        else:
+            training_files_noerrors = glob.glob(os.path.join(args.data, "same.*.tfrecord"))
+            noerrors_dataset = tf.data.TFRecordDataset(training_files_noerrors).map(decoder_fn)
+            dataset = tf.data.Dataset.sample_from_datasets([errors_dataset, noerrors_dataset], 
+                                                            weights=[args.set_error_fraction, 1-args.set_error_fraction],
+                                                            stop_on_empty_dataset=True)
     else:
-        dataset = errors_dataset
-    
+        training_files = glob.glob(os.path.join(args.data, "all.*.tfrecord"))    
+        dataset = tf.data.TFRecordDataset(training_files).map(decoder_fn)
+
     dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True)
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
@@ -131,14 +143,19 @@ def train_model(args):
         train_dataset = train_dataset.take(args.batches)
 
     # parse architecture from argument
-    architecture = args.architecture.split('_')
-    use_draft = (architecture[0] == 'draft')
-    use_signal = (architecture[-1] == 'signal')
-    use_sequence = ('sequence' in architecture)
-    
+    architecture_args = args.architecture.split('_')
+    use_draft = (architecture_args[0] == 'draft')
+    use_signal = (architecture_args[-1] == 'signal')
+    use_sequence = ('sequence' in architecture_args)
+
+    # parse loss function from argument
+    loss_args = args.loss.split('_')
+    use_ml_loss=('ml' in loss_args) 
+    use_scst_loss= ('policy' in loss_args)
+    use_scst_baseline=('baseline' in loss_args)
+
     with strategy.scope():
         # get the neural network architecture model
-        # TODO: specify hyperparameters with JSON/YAML file?
         model = semapore.network.build_model(
             seq_dim=args.seq_dim, 
             signal_dim=args.signal_dim, 
@@ -171,39 +188,60 @@ def train_model(args):
         # callbacks for training
         os.makedirs(os.path.join(out_dir, "checkpoints"))
         model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(os.path.join(out_dir, "checkpoints", "{epoch:02d}.hdf5"), save_freq='epoch', save_weights_only=True)
-        early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor="val_loss", min_delta=1e-3, patience=3, verbose=1)
         tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq='epoch')
         #tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(out_dir,'logs'), update_freq=50, profile_batch='50,100')
         terminante_on_nan_callback = tf.keras.callbacks.TerminateOnNaN()
         csv_logger_callback = tf.keras.callbacks.CSVLogger(os.path.join(out_dir,'train.csv'), separator=',', append=False)
 
         callbacks = [model_checkpoint_callback,
-                    early_stopping_callback,
                     tensorboard_callback,
                     terminante_on_nan_callback,
                     csv_logger_callback]
 
+        if args.early_stopping:
+            early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor=args.early_stopping, min_delta=0, patience=5, verbose=1, restore_best_weights=True)
+            callbacks.append(early_stopping_callback)
+
         if args.wandb:
             callbacks.append(WandbCallback())
 
-        model.compile(optimizer=optimizer, loss=semapore.network.ctc_loss(), metrics=[EditDistance()])
+        epochs_to_train = args.epochs
+        if use_scst_loss and args.policy_skip_epochs > 0:
+            assert(args.policy_skip_epochs < args.epochs)
 
-        model.fit(train_dataset, epochs=args.epochs, validation_data=validation_dataset, callbacks=callbacks)
+            loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=False, 
+                                        use_scst_baseline=False,
+                                        use_ml_loss=True, 
+                                        ctc_merge_repeated=args.ctc_merge_repeated)
+
+            model.compile(optimizer=optimizer, loss=loss_fn, metrics=[EditDistance()])
+            model.fit(train_dataset, epochs=args.policy_skip_epochs, validation_data=validation_dataset, callbacks=callbacks)
+            epochs_to_train -= args.policy_skip_epochs
+
+        loss_fn = semapore.network.scst_ctc_loss(use_scst_loss=use_scst_loss, 
+                                                use_scst_baseline=use_scst_baseline,
+                                                scst_lambda=args.policy_lambda, 
+                                                use_ml_loss=use_ml_loss, 
+                                                ctc_merge_repeated=args.ctc_merge_repeated)
+
+        model.compile(optimizer=optimizer, loss=loss_fn, metrics=[EditDistance()])
+
+        model.fit(train_dataset, epochs=epochs_to_train, validation_data=validation_dataset, callbacks=callbacks)
 
         model.save(os.path.join(out_dir,"final_model"), include_optimizer=False)
 
 if __name__ == '__main__':
     # general options
     parser = argparse.ArgumentParser(description='Train new Semapore model')
-    parser.add_argument('--data', help='Path to training files in compressed hdf5 format', required=True)
-    parser.add_argument('--name', default='run', help='Name of run')
+    parser.add_argument('--data', help='Path to training files in serialized TFRecord format', required=True)
+    parser.add_argument('--name', default=None, help='Name of run')
     parser.add_argument('--epochs', type=int, default=1, help='Number of epochs to train on')
-    parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training. Default: Train on all available GPUs.')
+    parser.add_argument('--gpu', nargs="+", default=[], help='Specify which GPU devices for training (default: train on all available GPUs)')
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
     parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
-    parser.add_argument('--error_fraction', type=float, default=0.5, help='Fraction of training examples with errors to correct')
-    parser.add_argument('--batches', type=int, default=0, help='Only train for N batches (for testing)')    
+    parser.add_argument('--set_error_fraction', type=float, default=0.5, help='Set ratio of examples with/without errors in draft sequence')
+    parser.add_argument('--batches', type=int, default=0, help='Only train for N batches each epoch')    
 
     # training options
     parser.add_argument('--batch_size', default=64, type=int, help='Minibatch size for training')
@@ -211,7 +249,11 @@ if __name__ == '__main__':
     parser.add_argument('--validation_size', default=100, type=int, help='Number of batches to withold for validation set (if --validation not specified)')
     parser.add_argument('--ctc_merge_repeated', action='store_true', default=False, help='boolean option for tf.compat.v1.nn.ctc_loss')
     parser.add_argument('--optimizer', default="Adam", choices=["Adam", "SGD"], help='Optimizer for gradient descent')
+    parser.add_argument('--early_stopping', default=None, choices=["val_loss", "val_edit_distance"], help='Stop training when metric stops decreasing')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
+    parser.add_argument('--loss', choices=['ml','ml_policy','ml_policy_baseline','policy_baseline','policy'], default='ml', help='Loss function for training')
+    parser.add_argument('--policy_lambda', type=float, default=1, help='Weight given to policy gradient loss')
+    parser.add_argument('--policy_skip_epochs', type=int, default=0, help='Only start policy gradient after first N epochs')
     
     # architecture options
     parser.add_argument('--architecture', choices=['sequence','signal','draft_signal','sequence_signal','draft_sequence','draft_sequence_signal'], default='sequence', help='')
