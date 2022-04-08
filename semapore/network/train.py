@@ -36,7 +36,7 @@ def ctc_loss(ctc_merge_repeated=False):
     # closure for TF1 CTC loss
     # y_pred are unnormalized logits and y_true is a RaggedTensor of labels
     def loss(y_true, y_pred):
-        y_true_sparse = y_true.to_sparse()
+        y_true_sparse = tf.cast(y_true.to_sparse(),np.int32)
         sequence_length = tf.ones(tf.shape(y_pred)[0], dtype=np.int32)*tf.shape(y_pred)[1]
         return tf.compat.v1.nn.ctc_loss(inputs=y_pred,
                                         labels=y_true_sparse,

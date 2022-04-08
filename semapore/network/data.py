@@ -133,10 +133,12 @@ def get_reference_sequences(pileup, window_bounds, hit):
             this_ref_seq = r_seq[ref_rel_start:ref_rel_end + 1]
             this_draft_seq = draft_sequence[draft_start:draft_end + 1]
 
-            if len(this_ref_seq) > 0 and len(this_draft_seq) > 0 and ('N' not in this_ref_seq) and len(this_ref_seq) <= window_size and len(this_draft_seq) > window_size/4:
+            if 'N' in this_ref_seq:
+                print("Warning: N in ref seq, window {}, draft_len={} ref_len={}, alignment={}".format(window_idx, len(this_draft_seq), len(this_ref_seq), pileup.alignment),  file=sys.stderr)            
+            elif len(this_ref_seq) > 0 and len(this_draft_seq) > 0 and len(this_ref_seq) <= window_size:
                 ref_window_idx.append(window_idx)
-                ref_window_sequences.append(this_ref_seq)
-                draft_window_sequences.append(this_draft_seq)
+                ref_window_sequences.append(np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in this_ref_seq]).astype(np.int16))
+                draft_window_sequences.append(np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in this_draft_seq]).astype(np.int16))
                 #print("{}\t{}..{}\t{}..{}".format(hit.strand, this_draft_seq[:10],this_draft_seq[-10:], this_ref_seq[:10],this_ref_seq[-10:]), file=sys.stderr)
 
             else:
@@ -144,7 +146,7 @@ def get_reference_sequences(pileup, window_bounds, hit):
         else:
             print("Warning: draft not contained in ref, window {}, alignment={}".format(window_idx, pileup.alignment),  file=sys.stderr)
 
-    return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
+    return draft_window_sequences, ref_window_sequences, np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
 
 def make_training_data(draft, alignment, reads, hit=None, out="tmp", reference="", trimmed_reads="", window=64, max_time=80):
     """Write labeled training data for one draft sequence to NPZ
@@ -185,12 +187,12 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", reference="
     draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(pileup, window_bounds, hit)
 
     print("{}: {} out of {} windows for training data".format(alignment, len(ref_windows), len(window_bounds)))
+    files = np.array([draft, alignment, reference, trimmed_reads])
     draft_input = draft_input[ref_windows]
     sequence_input = sequence_input[ref_windows]
     signal_input = signal_input[ref_windows]
     signal_input_mask = signal_input_mask[ref_windows]
-    files = np.array([draft, alignment, reference, trimmed_reads])
-
+    
     outfile = "{}.all.npz".format(out)
     np.savez_compressed(outfile,
         files=files,
