@@ -94,6 +94,7 @@ def get_pileup(alignment, reference):
     ref_seqs = load_fastx_dict(reference, "fasta")
 
     char_encoding = {v:i for i,v in enumerate(['<NONE>','<DEL>','<INS>','A','C','G','T','a','c','g','t'])}
+    null_value = np.iinfo(np.int32).max
     
     sequence_pileups = []
     pysam.set_verbosity(0)
@@ -130,7 +131,7 @@ def get_pileup(alignment, reference):
                                 max_insert_size = int(indel_size)
 
                     elif base == '*':
-                        this_column[read] = (None, char_encoding['<DEL>'])
+                        this_column[read] = (null_value, char_encoding['<DEL>'])
 
                     else:
                         this_column[read] = (pos, char_encoding[base])
@@ -139,15 +140,15 @@ def get_pileup(alignment, reference):
 
                 # add insertion columns
                 for i in range(max_insert_size):
-                    insertion_col = {pileupref:(None, char_encoding['<INS>'])}
+                    insertion_col = {pileupref:(null_value, char_encoding['<INS>'])}
                     for k,v in insertions.items():
                         if i < len(v[1]):
                             insertion_col[k] = (v[0]+1+i, char_encoding[v[1][i]])
                         else:
-                            insertion_col[k] = (None, char_encoding['<INS>'])
+                            insertion_col[k] = (null_value, char_encoding['<INS>'])
                     for r in query_names:
                         if r not in insertions:
-                            insertion_col[r] = (None, char_encoding['<INS>'])
+                            insertion_col[r] = (null_value, char_encoding['<INS>'])
                     curr_pileup.add_columm(insertion_col)
 
         sequence_pileups.append(curr_pileup)

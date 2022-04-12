@@ -1,6 +1,7 @@
-from math import ceil
+from math import ceil, floor
 import sys
 import numpy as np
+from tqdm import tqdm
 
 def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_remainder=False):
     # returns list of examples
@@ -10,20 +11,19 @@ def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_r
     # either to be serialized or passed to a generator
 
     num_columns = pileup.get_num_columns()
-    if drop_remainder:
-        num_columns = (num_columns // window_size)*window_size
+    num_windows = floor(num_columns / window_size) if drop_remainder else ceil(num_columns / window_size)
 
-    window_bounds = np.zeros((ceil(num_columns / window_size), 2), dtype=np.int32)
+    window_bounds = np.zeros((num_windows, 2), dtype=np.int32)
+    window_bounds[:,0] = np.arange(num_windows) * window_size
+    window_bounds[:,1] = window_bounds[:,0] + window_size
+    window_bounds[-1,1] = min(window_bounds[-1,1], num_columns)
+
     examples = []
-
-    col = 0
-    col_i = 0
-
     num_signals_processed = 0
     num_over_maxtime = 0
 
-    while col < num_columns:
-        this_window_size = min(col+window_size, num_columns)-col
+    for w in tqdm(window_bounds):
+        this_window_size = w[1] - w[0]
         
         signal_values = []
         signal_row_lengths = []
@@ -32,7 +32,7 @@ def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_r
         sequence_col_lengths = []
         draft = []
 
-        pileup_window = pileup.get_window(col, col+window_size)
+        pileup_window = pileup.get_window(w[0], w[1])
 
         for i in range(this_window_size):
             alignment_column = pileup_window.pileup[i]
@@ -73,10 +73,6 @@ def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_r
                     this_signal = []
             
             signal_col_lengths.append(n_signal)
-
-        window_bounds[col_i] = np.array([col, col+this_window_size])
-        col += this_window_size
-        col_i += 1
 
         examples.append({
             'signal_values':np.concatenate(signal_values).astype(np.int16),
