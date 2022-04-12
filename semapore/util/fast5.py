@@ -2,8 +2,11 @@ import sys
 import os
 import glob
 import h5py
+from collections import OrderedDict
 import matplotlib.pyplot as plt
 import numpy as np
+
+from .seq import load_fastx, get_sequence_offset
 
 def find_nested_reads(dir):
     # return lookup table of nested read paths
@@ -11,6 +14,85 @@ def find_nested_reads(dir):
     for r in glob.glob("{}/*/*.fast5".format(dir)):
         lookup_table[os.path.basename(r)] = r
     return lookup_table
+
+class ReadIndex:
+    """Cached index of FAST5 reads
+        - use sequencing_summary.txt to set mapping of read_id <=> filename
+        - build table of filenames and full paths by looking in workspace/
+        - LRU cache to load FAST5 reads into memory as needed
+        - behaves like a dict mapping read IDs to basecalls
+        - can define masked reads covering subsequence of existing read
+    """
+
+    def __init__(self, sequencing_summary, maxsize=None, signal_scaling=None):
+        self.id2file = {}
+        self.file2id = {}
+        with open(sequencing_summary, 'r') as f:
+            for line in f:
+                fields = line.rstrip('\n').split('\t')
+                self.file2id[fields[0]] = fields[1]
+                self.id2file[fields[1]] = fields[0]
+        self.directory = os.path.join(os.path.split(sequencing_summary)[0], "workspace")
+        self.file2path = find_nested_reads(self.directory)
+        self.maxsize=maxsize
+        self.reads = OrderedDict()
+        self.signal_scaling=signal_scaling
+        self.masked_reads = {}
+
+    def __getitem__(self, key):
+        if key in self.masked_reads:
+            read, bounds = self.masked_reads[key]
+            return self.get_masked_read(masked_read=key, read=self.get_read(read), bounds=bounds)
+        else:
+            return self.get_read(key)
+
+    def __len__(self):
+        return len(self.id2file)
+    
+    def __contains__(self, key):
+        return key in self.id2file
+
+    def get_read(self, read):
+        if read in self.reads:
+            self.reads.move_to_end(read)
+            return self.reads[read]
+        result = self.get_read_from_fast5(read)
+        self.reads[read] = result
+        if self.maxsize is not None and len(self.reads) > self.maxsize:
+            self.reads.popitem(last=False)
+        return result
+
+    def get_read_from_fast5(self, read):
+        fast5_path = self.file2path[self.id2file[read]]
+        read_id, signal, segments, sequence = parse_guppy_fast5(fast5_path, scaling=self.signal_scaling)
+        return {'id':read_id, 'signal':signal, 'segments':segments, 'sequence':sequence}
+
+    def add_masked_read(self, read, bounds, masked_read=None):
+        if masked_read is not None:
+            self.masked_reads[masked_read] = (read, bounds)
+        else:
+            self.masked_reads[read] = (read, bounds)
+
+    def get_masked_read(self, masked_read, read, bounds):
+        return {'id':masked_read, 
+                'signal':read['signal'], 
+                'segments':read['segments'][bounds[0]:bounds[1]], 
+                'sequence':read['sequence'][bounds[0]:bounds[1]]}
+
+    def mask_from_fastx(self, f):
+        # assuming subreads are numbered with underscores e.g. read1_1, read1_2, etc
+        trimmed_reads = load_fastx(f)
+        read_offsets = {}
+        for r in trimmed_reads:
+            subread = r[0]
+            sub_seq = r[1]
+            read = subread.split('_')[0]
+            if self.__contains__(read):
+                full_seq = self.get_read(read)['sequence']
+                read_offset = get_sequence_offset(full_seq=full_seq, sub_seq=sub_seq)
+                read_offsets[subread] = read_offset
+                if read_offset:
+                    self.add_masked_read(masked_read=subread, read=read, bounds=read_offset)
 
 def get_reads(read_ids, dir=None, paths=None, scaling=None):
     """Load basecalled FAST5 files

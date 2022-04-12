@@ -1,10 +1,13 @@
+import os
 from Bio import SeqIO
 
 def revcomp(s):
     return ''.join([{'A':'T','C':'G','G':'C','T':'A'}[x] for x in s[::-1]])
 
-def load_fastx(f, fmt="fasta"):
-    # read FASTA/FASTQ into memory
+def load_fastx(f):
+    # infer format and read sequences into memory
+    fext = os.path.splitext(f)[1]
+    fmt = {'.fasta':'fasta', '.fa':'fasta', '.fastq':'fastq','.fq':'fastq'}[fext]
     seqs = []
     with open(f) as handle:
         for record in SeqIO.parse(handle, fmt):
