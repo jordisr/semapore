@@ -38,9 +38,9 @@ def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_r
             alignment_column = pileup_window.pileup[i]
             alignment_idx = pileup_window.pos[i]
 
-            draft.append(alignment_column[0])
-            sequence_values.append(alignment_column[1:])
-            sequence_col_lengths.append(len(alignment_column)-1)
+            draft.append(pileup_window.refseq[i])
+            sequence_values.append(alignment_column)
+            sequence_col_lengths.append(len(alignment_column))
            
             n_signal = 0
             for j, read_id in enumerate(pileup_window.reads):

@@ -2,7 +2,7 @@ import os
 from Bio import SeqIO
 
 def revcomp(s):
-    return ''.join([{'A':'T','C':'G','G':'C','T':'A'}[x] for x in s[::-1]])
+    return ''.join([{'A':'T','C':'G','G':'C','T':'A','N':'N'}[x] for x in s[::-1]])
 
 def load_fastx(f):
     # infer format and read sequences into memory

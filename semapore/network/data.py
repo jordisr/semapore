@@ -1,6 +1,6 @@
 import os
 import sys
-import glob
+import copy
 from tqdm import tqdm
 from multiprocessing import Pool
 import numpy as np
@@ -62,6 +62,58 @@ def get_alignment_coord(cs):
             operation_field += c
 
     return [np.array(r2q), np.array(q2r)]
+
+def add_labels_from_reference(features, aligner, mappy_batch_size=None):
+    features_with_labels = []
+    dna_alphabet = np.array(['A','C','G','T'])
+    
+    if mappy_batch_size is None:
+        mappy_batch_size = len(features)
+        
+    for mappy_batch_start in range(0, len(features), mappy_batch_size):
+
+        features_batch = features[mappy_batch_start:mappy_batch_start+mappy_batch_size]
+
+        draft_window_seq = [[(x - 3) % 4 for x in y['draft'] if x > 2] for y in features_batch]
+        draft_window_len = np.array([len(x) for x in draft_window_seq])
+        draft_window_pos = np.cumsum(draft_window_len)
+        draft_seq = np.concatenate(draft_window_seq).astype(np.int16)
+        draft_seq_to_map = ''.join(np.take(dna_alphabet, draft_seq))
+
+        draft_seq_bounds = np.zeros((draft_window_pos.shape[0], 2)).astype(int)
+        draft_seq_bounds[1:,0] = draft_window_pos[:-1]
+        draft_seq_bounds[:,1] = draft_window_pos
+
+        hit = semapore.network.AlignmentCopy(aligner, next(aligner.map(draft_seq_to_map, cs=True)))
+        print(hit.mlen/hit.blen, file=sys.stderr)
+
+        r_seq = hit.r_seq
+
+        [r2q, q2r] = semapore.network.get_alignment_coord(hit.cs)
+
+        # reverse coordinates for reverse matches
+        if hit.strand < 0:
+            r_seq = semapore.util.revcomp(r_seq)
+            r2q = max(r2q)-r2q[::-1]
+            q2r = max(q2r)-q2r[::-1]
+
+        for (draft_start, draft_end), feature in zip(draft_seq_bounds, features_batch):
+            if draft_start > hit.q_st and draft_end < hit.q_en:
+                ref_seq_from_window = r_seq[q2r[draft_start-hit.q_st]:q2r[draft_end-hit.q_st]]
+                if 'N'in ref_seq_from_window or len(ref_seq_from_window) < 1:
+                    # TODO: log skipped features
+                    continue
+                
+                ref_seq_from_window = np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in ref_seq_from_window])
+                ref_seq_from_window = ref_seq_from_window.astype(np.int16)
+
+                this_feature = copy.deepcopy(feature)
+                this_feature['labels'] = ref_seq_from_window
+                features_with_labels.append(this_feature)
+            else:
+                print("not contained", draft_start, file=sys.stderr)
+
+    return features_with_labels
 
 def get_reference_sequences(pileup, window_bounds, hit):
     """Get true labels by aligning draft to reference

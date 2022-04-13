@@ -21,9 +21,8 @@ class ReadID:
         self.reads = []
 
     def __getitem__(self, key):
-        read_id = self.dict.get(key, -1)
-        if read_id > 0:
-            return read_id
+        if key in self.dict:
+            return self.dict[key]
         else:
             self.n += 1
             self.dict[key] = self.n
