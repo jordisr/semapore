@@ -101,7 +101,7 @@ def add_labels_from_reference(features, aligner, mappy_batch_size=None):
             if draft_start > hit.q_st and draft_end < hit.q_en:
                 ref_seq_from_window = r_seq[q2r[draft_start-hit.q_st]:q2r[draft_end-hit.q_st]]
                 if 'N'in ref_seq_from_window or len(ref_seq_from_window) < 1:
-                    # TODO: log skipped features
+                    print("bad reference", len(ref_seq_from_window), draft_end-draft_start, file=sys.stderr)
                     continue
                 
                 ref_seq_from_window = np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in ref_seq_from_window])
@@ -111,7 +111,7 @@ def add_labels_from_reference(features, aligner, mappy_batch_size=None):
                 this_feature['labels'] = ref_seq_from_window
                 features_with_labels.append(this_feature)
             else:
-                print("not contained", draft_start, file=sys.stderr)
+                print("not fully contained", (draft_start, draft_end), (hit.q_st, hit.q_en), file=sys.stderr)
 
     return features_with_labels
 

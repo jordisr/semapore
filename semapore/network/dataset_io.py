@@ -43,9 +43,8 @@ def decode_tfrecord(x):
     # map over TFRecordDataset to get tensors
     feature_schema = {"signal_values": tf.io.FixedLenFeature([], dtype=tf.string),
                     "signal_row_lengths": tf.io.FixedLenFeature([], dtype=tf.string),
-                    "signal_col_lengths": tf.io.FixedLenFeature([], dtype=tf.string),
                     "sequence_values": tf.io.FixedLenFeature([], dtype=tf.string),
-                    "sequence_col_lengths": tf.io.FixedLenFeature([], dtype=tf.string),
+                    "column_lengths": tf.io.FixedLenFeature([], dtype=tf.string),
                     "draft": tf.io.FixedLenFeature([], dtype=tf.string),
                     "labels": tf.io.FixedLenFeature([], dtype=tf.string)
                      }
@@ -54,17 +53,16 @@ def decode_tfrecord(x):
 
     signal_values = tf.io.parse_tensor(parsed_example['signal_values'], tf.int16)
     signal_row_lengths = tf.io.parse_tensor(parsed_example['signal_row_lengths'], tf.int32)
-    signal_col_lengths = tf.io.parse_tensor(parsed_example['signal_col_lengths'], tf.int32)
     sequence_values = tf.io.parse_tensor(parsed_example['sequence_values'], tf.int16)
-    sequence_col_lengths = tf.io.parse_tensor(parsed_example['sequence_col_lengths'], tf.int32)
+    column_lengths = tf.io.parse_tensor(parsed_example['column_lengths'], tf.int32)
     draft = tf.io.parse_tensor(parsed_example['draft'], tf.int16)
     labels = tf.ensure_shape(tf.io.parse_tensor(parsed_example['labels'], tf.int16), (None,))
     
     signal_rt = tf.RaggedTensor.from_row_lengths(
                     values=tf.RaggedTensor.from_row_lengths(values=tf.expand_dims(signal_values, 1), row_lengths=signal_row_lengths), 
-                    row_lengths=signal_col_lengths)
+                    row_lengths=column_lengths)
     
-    sequence_rt = tf.RaggedTensor.from_row_lengths(values=sequence_values, row_lengths=sequence_col_lengths)
+    sequence_rt = tf.RaggedTensor.from_row_lengths(values=sequence_values, row_lengths=column_lengths)
     
     draft_rt = tf.RaggedTensor.from_tensor(tf.expand_dims(draft, axis=0))
 
