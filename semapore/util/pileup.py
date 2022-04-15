@@ -1,4 +1,5 @@
 import re
+import os
 import sys
 import pysam
 import numpy as np
@@ -105,7 +106,7 @@ def get_pileup(alignment, reference):
     pysam.set_verbosity(0)
     
     with pysam.AlignmentFile(alignment, "rb") as samfile:
-        with tqdm(total=len(ref_seqs)) as pbar:
+        with tqdm(total=len(ref_seqs), desc=os.path.basename(alignment)) as pbar:
             pileupref = None
             for pileupcolumn in samfile.pileup(min_base_quality=0):
                 if pileupcolumn.reference_name != pileupref:

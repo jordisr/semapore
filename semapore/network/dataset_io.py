@@ -32,12 +32,41 @@ def feature_from_tensor(tensor):
     serialized_tensor = tf.io.serialize_tensor(tensor)
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[serialized_tensor.numpy()]))
 
+def serialize_example(example):
+    features_for_tfexample = {k:feature_from_tensor(v) for k,v in example.items()}
+    tfexample = tf.train.Example(features=tf.train.Features(feature=features_for_tfexample))
+    return tfexample.SerializeToString()
+
 def write_serialized_examples(examples, outfile):
     with tf.io.TFRecordWriter(outfile) as file_writer:        
         for example in tqdm(examples):               
-            features_for_tfexample = {k:feature_from_tensor(v) for k,v in example.items()}
-            tfexample = tf.train.Example(features=tf.train.Features(feature=features_for_tfexample))
-            file_writer.write(tfexample.SerializeToString())
+            file_writer.write(serialize_example(example))
+
+class BufferedRecordWriter:
+    def __init__(self, name, buffer_size):
+        self.base_name = name
+        self.buffer_size = buffer_size
+        self.current_size = 0
+        self.file_num = 0
+        self.n = 0
+        self.current_file = tf.io.TFRecordWriter("{}.{}.tfrecord".format(self.base_name, self.file_num))
+    
+    def write(self, examples):
+        for example in examples:
+            if self.n > self.buffer_size:
+                self.file_num += 1
+                self.n = 0
+                self.current_file.close()
+                self.current_file = tf.io.TFRecordWriter("{}.{}.tfrecord".format(self.base_name, self.file_num))
+            serialized_example = serialize_example(example)
+            self.current_file.write(serialized_example)
+            self.n += 1
+
+    def close(self):
+        self.current_file.close()
+
+    def __exit__(self):
+        self.current_file.close()
 
 def decode_tfrecord(x):
     # map over TFRecordDataset to get tensors

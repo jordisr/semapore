@@ -22,7 +22,7 @@ def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_r
     num_signals_processed = 0
     num_over_maxtime = 0
 
-    for w in tqdm(window_bounds):
+    for w in tqdm(window_bounds, position=0, leave=True, desc=pileup.refname):
         this_window_size = w[1] - w[0]
         
         signal_values = []
