@@ -58,9 +58,11 @@ class Pileup:
     def __len__(self):
         return self.get_num_columns()
 
-    def get_window(self, start, end, min_overlap=None):
+    def get_window(self, start, end, min_overlap=None, max_depth=50):
         # return pileup segment with all reads with minimum overlap over window
         window = pd.DataFrame(self.pileup[start:end]).applymap(lambda x: (None,0) if pd.isnull(x) else x)
+        if window.shape[1] > max_depth:
+            window = window.iloc[:,:max_depth]
         if min_overlap is not None:
             cols_to_drop = list(window.columns[np.sum(window.applymap(lambda x: x[1] == 0)) > int(min_overlap*(end-start))])
             window.drop(columns=cols_to_drop, inplace=True)

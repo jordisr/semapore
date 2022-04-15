@@ -68,9 +68,14 @@ def featurize_inputs_ragged(pileup, reads, window_size=100, max_time=150, drop_r
 
                 signal_values.append(this_signal[:num_signals])
                 signal_row_lengths.append(num_signals)
-            
+        
+        if len(signal_values) > 0:
+            signal_values = np.concatenate(signal_values)
+        else:
+            signal_values = np.array([])
+
         examples.append({
-            'signal_values':np.concatenate(signal_values).astype(np.int16),
+            'signal_values':signal_values.astype(np.int16),
             'signal_row_lengths':np.array(signal_row_lengths).astype(np.int32),
             'sequence_values':np.concatenate(sequence_values).astype(np.int16),
             'column_lengths':np.array(column_lengths).astype(np.int32),
