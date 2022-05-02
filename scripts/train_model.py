@@ -263,11 +263,11 @@ if __name__ == '__main__':
     
     # architecture options
     parser.add_argument('--architecture', choices=['sequence','signal','draft_signal','sequence_signal','draft_sequence','draft_sequence_signal'], default='sequence', help='')
-    parser.add_argument('--seq_dim', default=64, type=int, help='')
-    parser.add_argument('--signal_dim', default=64, type=int, help='')
-    parser.add_argument('--encoder_dim', default=128, type=int, help='')
+    parser.add_argument('--seq_dim', default=32, type=int, help='')
+    parser.add_argument('--signal_dim', default=128, type=int, help='')
+    parser.add_argument('--encoder_dim', default=512, type=int, help='')
     parser.add_argument('--num_row_layers', default=1, type=int, help='')
-    parser.add_argument('--num_col_layers', default=1, type=int, help='')
+    parser.add_argument('--num_col_layers', default=3, type=int, help='')
     
     args = parser.parse_args()
     train_model(args)
