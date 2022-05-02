@@ -17,8 +17,8 @@ def get_alignment_coord(cs):
 
     q2r = []
     r2q = []
-    coord_r = 0
-    coord_q = 0
+    coord_r = -1
+    coord_q = -1
 
     for i, c in enumerate(cs):
         if c in [':','+','-','*',"~"] or (i == len(cs)-1):
@@ -30,10 +30,10 @@ def get_alignment_coord(cs):
                     match_length = int(operation_field)
 
                     for j in range(match_length):
-                        r2q.append(coord_q)
-                        q2r.append(coord_r)
                         coord_r += 1
                         coord_q += 1
+                        r2q.append(coord_q)
+                        q2r.append(coord_r)
 
                 elif operation == "+":
                     # insertion with respect to the reference
@@ -49,10 +49,10 @@ def get_alignment_coord(cs):
 
                 elif operation == "*":
                     # substitution
-                    r2q.append(coord_q)
-                    q2r.append(coord_r)
                     coord_r += 1
                     coord_q += 1
+                    r2q.append(coord_q)
+                    q2r.append(coord_r)
 
                 elif operation == "~":
                     pass
@@ -61,7 +61,13 @@ def get_alignment_coord(cs):
         else:
             operation_field += c
 
-    return [np.array(r2q), np.array(q2r)]
+    r2q = np.array(r2q)
+    q2r = np.array(q2r)
+
+    r2q[r2q < 0] = 0
+    q2r[q2r < 0] = 0
+
+    return [r2q, q2r]
 
 def add_labels_from_reference(features, aligner, mappy_batch_size=None):
     features_with_labels = []
@@ -84,23 +90,30 @@ def add_labels_from_reference(features, aligner, mappy_batch_size=None):
         draft_seq_bounds[1:,0] = draft_window_pos[:-1]
         draft_seq_bounds[:,1] = draft_window_pos
 
-        hit = semapore.network.AlignmentCopy(aligner, next(aligner.map(draft_seq_to_map, cs=True)))
-        print(hit.mlen/hit.blen, file=sys.stderr)
+        try:
+            hit = semapore.network.AlignmentCopy(aligner, next(aligner.map(draft_seq_to_map, cs=True)))
+        except:
+            print("No alignment", file=sys.stderr)
+            continue
+        #print(hit.mlen/hit.blen, file=sys.stderr)
 
         r_seq = hit.r_seq
 
+        #print("strand:{},  q_st:{}, q_en:{}".format(hit.strand, hit.q_st, hit.q_en))
         [r2q, q2r] = semapore.network.get_alignment_coord(hit.cs)
 
         # reverse coordinates for reverse matches
         if hit.strand < 0:
             r_seq = semapore.util.revcomp(r_seq)
-            r2q = max(r2q)-r2q[::-1]
+            #r2q = max(r2q)-r2q[::-1]
             q2r = max(q2r)-q2r[::-1]
 
+        #print(q2r, len(r_seq), len(draft_seq), len(draft_seq_to_map), hit.q_en - hit.q_st, len(q2r))
+
         for (draft_start, draft_end), feature in zip(draft_seq_bounds, features_batch):
-            if draft_start > hit.q_st and draft_end < hit.q_en:
-                ref_seq_from_window = r_seq[q2r[draft_start-hit.q_st]:q2r[draft_end-hit.q_st]]
-                if 'N'in ref_seq_from_window or len(ref_seq_from_window) < 1 or (draft_end - draft_start) < 1:
+            if draft_start >= hit.q_st and draft_end < hit.q_en and (draft_end-draft_start) > 0:
+                ref_seq_from_window = r_seq[q2r[draft_start-hit.q_st]:q2r[draft_end-hit.q_st-1]+1]
+                if 'N'in ref_seq_from_window or len(ref_seq_from_window) < 1 or (draft_end - draft_start) < 1 and len(feature['signal_values']) > 0:
                     print("bad reference", len(ref_seq_from_window), draft_end-draft_start, file=sys.stderr)
                     continue
                 
@@ -112,6 +125,7 @@ def add_labels_from_reference(features, aligner, mappy_batch_size=None):
                 features_with_labels.append(this_feature)
             else:
                 print("not fully contained", (draft_start, draft_end), (hit.q_st, hit.q_en), file=sys.stderr)
+                continue                
 
     return features_with_labels
 

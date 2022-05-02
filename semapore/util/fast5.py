@@ -9,9 +9,9 @@ import numpy as np
 from .seq import load_fastx, get_sequence_offset
 
 def find_nested_reads(dir):
-    # return lookup table of nested read paths
+    # return lookup table of read paths one and two levels deep
     lookup_table = {}
-    for r in glob.glob("{}/*/*.fast5".format(dir)):
+    for r in glob.glob("{}/*.fast5".format(dir))+glob.glob("{}/*/*.fast5".format(dir)):
         lookup_table[os.path.basename(r)] = r
     return lookup_table
 
@@ -154,9 +154,8 @@ def plot_signal_segments(signal, segments, sequence=None, alternating_colors = [
     return fig, ax
 
 def parse_guppy_fast5(f, scaling=None):
-    """Extract signal, sequence, and segmentation from a basecalled FAST5
+    """Extract signal, sequence, and segmentation from a basecalled FAST5 (multi FAST5 not currently supported)
     """
-    # TODO: support multi-fast5
 
     hdf = h5py.File(f,'r')
 
