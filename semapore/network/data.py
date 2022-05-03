@@ -111,7 +111,7 @@ def add_labels_from_reference(features, aligner, mappy_batch_size=None):
         #print(q2r, len(r_seq), len(draft_seq), len(draft_seq_to_map), hit.q_en - hit.q_st, len(q2r))
 
         for (draft_start, draft_end), feature in zip(draft_seq_bounds, features_batch):
-            if draft_start >= hit.q_st and draft_end < hit.q_en and (draft_end-draft_start) > 0:
+            if draft_start >= hit.q_st and draft_end <= hit.q_en and (draft_end-draft_start) > 0:
                 ref_seq_from_window = r_seq[q2r[draft_start-hit.q_st]:q2r[draft_end-hit.q_st-1]+1]
                 if 'N'in ref_seq_from_window or len(ref_seq_from_window) < 1 or (draft_end - draft_start) < 1 and len(feature['signal_values']) > 0:
                     print("bad reference", len(ref_seq_from_window), draft_end-draft_start, file=sys.stderr)
