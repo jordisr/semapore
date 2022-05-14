@@ -1,6 +1,6 @@
 import os
 import sys
-import glob
+import copy
 from tqdm import tqdm
 from multiprocessing import Pool
 import numpy as np
@@ -17,8 +17,8 @@ def get_alignment_coord(cs):
 
     q2r = []
     r2q = []
-    coord_r = 0
-    coord_q = 0
+    coord_r = -1
+    coord_q = -1
 
     for i, c in enumerate(cs):
         if c in [':','+','-','*',"~"] or (i == len(cs)-1):
@@ -30,10 +30,10 @@ def get_alignment_coord(cs):
                     match_length = int(operation_field)
 
                     for j in range(match_length):
-                        r2q.append(coord_q)
-                        q2r.append(coord_r)
                         coord_r += 1
                         coord_q += 1
+                        r2q.append(coord_q)
+                        q2r.append(coord_r)
 
                 elif operation == "+":
                     # insertion with respect to the reference
@@ -49,10 +49,10 @@ def get_alignment_coord(cs):
 
                 elif operation == "*":
                     # substitution
-                    r2q.append(coord_q)
-                    q2r.append(coord_r)
                     coord_r += 1
                     coord_q += 1
+                    r2q.append(coord_q)
+                    q2r.append(coord_r)
 
                 elif operation == "~":
                     pass
@@ -61,7 +61,73 @@ def get_alignment_coord(cs):
         else:
             operation_field += c
 
-    return [np.array(r2q), np.array(q2r)]
+    r2q = np.array(r2q)
+    q2r = np.array(q2r)
+
+    r2q[r2q < 0] = 0
+    q2r[q2r < 0] = 0
+
+    return [r2q, q2r]
+
+def add_labels_from_reference(features, aligner, mappy_batch_size=None):
+    features_with_labels = []
+    dna_alphabet = np.array(['A','C','G','T'])
+    
+    if mappy_batch_size is None:
+        mappy_batch_size = len(features)
+        
+    for mappy_batch_start in range(0, len(features), mappy_batch_size):
+
+        features_batch = features[mappy_batch_start:mappy_batch_start+mappy_batch_size]
+
+        draft_window_seq = [[(x - 3) % 4 for x in y['draft'] if x > 2] for y in features_batch]
+        draft_window_len = np.array([len(x) for x in draft_window_seq])
+        draft_window_pos = np.cumsum(draft_window_len)
+        draft_seq = np.concatenate(draft_window_seq).astype(np.int16)
+        draft_seq_to_map = ''.join(np.take(dna_alphabet, draft_seq))
+
+        draft_seq_bounds = np.zeros((draft_window_pos.shape[0], 2)).astype(int)
+        draft_seq_bounds[1:,0] = draft_window_pos[:-1]
+        draft_seq_bounds[:,1] = draft_window_pos
+
+        try:
+            hit = semapore.network.AlignmentCopy(aligner, next(aligner.map(draft_seq_to_map, cs=True)))
+        except:
+            print("No alignment", file=sys.stderr)
+            continue
+        #print(hit.mlen/hit.blen, file=sys.stderr)
+
+        r_seq = hit.r_seq
+
+        #print("strand:{},  q_st:{}, q_en:{}".format(hit.strand, hit.q_st, hit.q_en))
+        [r2q, q2r] = semapore.network.get_alignment_coord(hit.cs)
+
+        # reverse coordinates for reverse matches
+        if hit.strand < 0:
+            r_seq = semapore.util.revcomp(r_seq)
+            #r2q = max(r2q)-r2q[::-1]
+            q2r = max(q2r)-q2r[::-1]
+
+        #print(q2r, len(r_seq), len(draft_seq), len(draft_seq_to_map), hit.q_en - hit.q_st, len(q2r))
+
+        for (draft_start, draft_end), feature in zip(draft_seq_bounds, features_batch):
+            if draft_start >= hit.q_st and draft_end <= hit.q_en and (draft_end-draft_start) > 0:
+                ref_seq_from_window = r_seq[q2r[draft_start-hit.q_st]:q2r[draft_end-hit.q_st-1]+1]
+                if 'N'in ref_seq_from_window or len(ref_seq_from_window) < 1 or (draft_end - draft_start) < 1 and len(feature['signal_values']) > 0:
+                    print("bad reference", len(ref_seq_from_window), draft_end-draft_start, file=sys.stderr)
+                    continue
+                
+                ref_seq_from_window = np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in ref_seq_from_window])
+                ref_seq_from_window = ref_seq_from_window.astype(np.int16)
+
+                this_feature = copy.deepcopy(feature)
+                this_feature['labels'] = ref_seq_from_window
+                features_with_labels.append(this_feature)
+            else:
+                print("not fully contained", (draft_start, draft_end), (hit.q_st, hit.q_en), file=sys.stderr)
+                continue                
+
+    return features_with_labels
 
 def get_reference_sequences(pileup, window_bounds, hit):
     """Get true labels by aligning draft to reference
@@ -133,10 +199,12 @@ def get_reference_sequences(pileup, window_bounds, hit):
             this_ref_seq = r_seq[ref_rel_start:ref_rel_end + 1]
             this_draft_seq = draft_sequence[draft_start:draft_end + 1]
 
-            if len(this_ref_seq) > 0 and len(this_draft_seq) > 0 and ('N' not in this_ref_seq) and len(this_ref_seq) <= window_size and len(this_draft_seq) > window_size/4:
+            if 'N' in this_ref_seq:
+                print("Warning: N in ref seq, window {}, draft_len={} ref_len={}, alignment={}".format(window_idx, len(this_draft_seq), len(this_ref_seq), pileup.alignment),  file=sys.stderr)            
+            elif len(this_ref_seq) > 0 and len(this_draft_seq) > 0 and len(this_ref_seq) <= window_size:
                 ref_window_idx.append(window_idx)
-                ref_window_sequences.append(this_ref_seq)
-                draft_window_sequences.append(this_draft_seq)
+                ref_window_sequences.append(np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in this_ref_seq]).astype(np.int16))
+                draft_window_sequences.append(np.array([{'A':0,'C':1,'G':2,'T':3}[i] for i in this_draft_seq]).astype(np.int16))
                 #print("{}\t{}..{}\t{}..{}".format(hit.strand, this_draft_seq[:10],this_draft_seq[-10:], this_ref_seq[:10],this_ref_seq[-10:]), file=sys.stderr)
 
             else:
@@ -144,7 +212,7 @@ def get_reference_sequences(pileup, window_bounds, hit):
         else:
             print("Warning: draft not contained in ref, window {}, alignment={}".format(window_idx, pileup.alignment),  file=sys.stderr)
 
-    return np.array(draft_window_sequences), np.array(ref_window_sequences), np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
+    return draft_window_sequences, ref_window_sequences, np.array(ref_window_idx), np.array([ref_name, hit.strand, hit.mlen/hit.blen, hit.q_st, hit.q_en, hit.r_st, hit.r_en])
 
 def make_training_data(draft, alignment, reads, hit=None, out="tmp", reference="", trimmed_reads="", window=64, max_time=80):
     """Write labeled training data for one draft sequence to NPZ
@@ -185,12 +253,12 @@ def make_training_data(draft, alignment, reads, hit=None, out="tmp", reference="
     draft_sequences, ref_sequences, ref_windows, ref_name = get_reference_sequences(pileup, window_bounds, hit)
 
     print("{}: {} out of {} windows for training data".format(alignment, len(ref_windows), len(window_bounds)))
+    files = np.array([draft, alignment, reference, trimmed_reads])
     draft_input = draft_input[ref_windows]
     sequence_input = sequence_input[ref_windows]
     signal_input = signal_input[ref_windows]
     signal_input_mask = signal_input_mask[ref_windows]
-    files = np.array([draft, alignment, reference, trimmed_reads])
-
+    
     outfile = "{}.all.npz".format(out)
     np.savez_compressed(outfile,
         files=files,

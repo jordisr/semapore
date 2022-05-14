@@ -106,7 +106,7 @@ def train_model(args):
     print("Number of devices: {}".format(strategy.num_replicas_in_sync))
 
     # load training datas
-    decoder_fn = semapore.network.make_decoder(5)
+    decoder_fn = semapore.network.decode_tfrecord
 
     # mix training examples with and without errors
     if (args.set_error_fraction > 0) and (args.set_error_fraction <=1):
@@ -123,15 +123,21 @@ def train_model(args):
                                                             weights=[args.set_error_fraction, 1-args.set_error_fraction],
                                                             stop_on_empty_dataset=True)
     else:
-        training_files = glob.glob(os.path.join(args.data, "all.*.tfrecord"))    
+        if os.path.isdir(args.data):
+            training_files = glob.glob("{}/*.tfrecord".format(args.data))
+        else:
+            training_files = [args.data]
         dataset = tf.data.TFRecordDataset(training_files).map(decoder_fn)
 
     dataset = dataset.shuffle(buffer_size=500, reshuffle_each_iteration=True)
     batched_dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
     
     if args.validation:
-        validation_files = glob.glob("{}/*.tfrecord".format(args.validation))
-        print("Found {} files for validation set".format(len(validation_files)))
+        if os.path.isdir(args.validation):
+            validation_files = glob.glob("{}/*.tfrecord".format(args.validation))
+        else:
+            validation_files = [args.validation]
+
         validation_dataset = tf.data.TFRecordDataset(validation_files).map(decoder_fn)
         validation_dataset = validation_dataset.apply(tf.data.experimental.dense_to_ragged_batch(batch_size=args.batch_size, drop_remainder=True))
         train_dataset = batched_dataset
@@ -199,7 +205,7 @@ def train_model(args):
                     csv_logger_callback]
 
         if args.early_stopping:
-            early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor=args.early_stopping, min_delta=0, patience=5, verbose=1, restore_best_weights=True)
+            early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor=args.early_stopping, min_delta=0, patience=10, verbose=1, restore_best_weights=True)
             callbacks.append(early_stopping_callback)
 
         if args.wandb:
@@ -240,7 +246,7 @@ if __name__ == '__main__':
     parser.add_argument('--restart', default=False, help='Trained model to load (if directory, loads latest from checkpoint file)')
     parser.add_argument('--seed', type=int, default=None, help='Explicitly set random seed')
     parser.add_argument('--wandb', action='store_true', help='Log run on Weights & Biases')
-    parser.add_argument('--set_error_fraction', type=float, default=0.5, help='Set ratio of examples with/without errors in draft sequence')
+    parser.add_argument('--set_error_fraction', type=float, default=0, help='Set ratio of examples with/without errors in draft sequence')
     parser.add_argument('--batches', type=int, default=0, help='Only train for N batches each epoch')    
 
     # training options
@@ -257,11 +263,11 @@ if __name__ == '__main__':
     
     # architecture options
     parser.add_argument('--architecture', choices=['sequence','signal','draft_signal','sequence_signal','draft_sequence','draft_sequence_signal'], default='sequence', help='')
-    parser.add_argument('--seq_dim', default=64, type=int, help='')
-    parser.add_argument('--signal_dim', default=64, type=int, help='')
-    parser.add_argument('--encoder_dim', default=128, type=int, help='')
+    parser.add_argument('--seq_dim', default=32, type=int, help='')
+    parser.add_argument('--signal_dim', default=128, type=int, help='')
+    parser.add_argument('--encoder_dim', default=512, type=int, help='')
     parser.add_argument('--num_row_layers', default=1, type=int, help='')
-    parser.add_argument('--num_col_layers', default=1, type=int, help='')
+    parser.add_argument('--num_col_layers', default=3, type=int, help='')
     
     args = parser.parse_args()
     train_model(args)

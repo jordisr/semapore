@@ -8,6 +8,7 @@ setuptools.setup(
    entry_points={'console_scripts':['semapore = semapore.__main__:main']},
    install_requires=[
    'tensorflow>=2',
+   'tensorflow_probability',
    'numpy',
    'scipy',
    'pandas',
@@ -15,6 +16,7 @@ setuptools.setup(
    'biopython',
    'pysam',
    'mappy',
-   'h5py'
+   'h5py',
+   'tqdm'
    ]
 )

@@ -10,14 +10,14 @@ def greedy_decode(logits):
     return labels
 
 def pileup_to_label(x):
-    x_ = x - 3
+    x_ = x + (-3) # getting a strange error with JIT compilation when doing "x - 3"
     return tf.ragged.boolean_mask(x_, x_ >= 0) % 4
 
 def q_quality(x):
     return -10*np.log10(x)
 
 def edit_distance(y_true, y_pred):
-    y_true_sparse = y_true.to_sparse()
+    y_true_sparse = tf.cast(y_true, tf.int32).to_sparse()
     predicted_labels = greedy_decode(y_pred).to_sparse()
     return tf.edit_distance(hypothesis=predicted_labels, truth=y_true_sparse, normalize=True)
 
@@ -36,7 +36,7 @@ def ctc_loss(ctc_merge_repeated=False):
     # closure for TF1 CTC loss
     # y_pred are unnormalized logits and y_true is a RaggedTensor of labels
     def loss(y_true, y_pred):
-        y_true_sparse = y_true.to_sparse()
+        y_true_sparse = tf.cast(y_true.to_sparse(),np.int32)
         sequence_length = tf.ones(tf.shape(y_pred)[0], dtype=np.int32)*tf.shape(y_pred)[1]
         return tf.compat.v1.nn.ctc_loss(inputs=y_pred,
                                         labels=y_true_sparse,
@@ -52,7 +52,7 @@ def scst_ctc_loss(use_scst_loss=True, use_scst_baseline=True, scst_lambda=1, use
     def loss_fn(y_true, y_pred):
         sequence_length = tf.ones(tf.shape(y_pred)[0], dtype=np.int32)*tf.shape(y_pred)[1]
         loss = 0
-        y_true_sparse = y_true.to_sparse()
+        y_true_sparse = tf.cast(y_true.to_sparse(), tf.int32)
         if use_scst_loss:
             # sample single path from each output probability and convert to labels
             sampled_paths = tfp.distributions.Categorical(logits=y_pred).sample()
@@ -67,7 +67,8 @@ def scst_ctc_loss(use_scst_loss=True, use_scst_baseline=True, scst_lambda=1, use
                                             sequence_length=sequence_length,
                                             time_major=False,
                                             preprocess_collapse_repeated=False,
-                                            ctc_merge_repeated=ctc_merge_repeated)
+                                            ctc_merge_repeated=ctc_merge_repeated,
+                                            ignore_longer_outputs_than_inputs=True)
 
             if use_scst_baseline:
                 # argmax labels
@@ -90,7 +91,9 @@ def scst_ctc_loss(use_scst_loss=True, use_scst_baseline=True, scst_lambda=1, use
                                             sequence_length=sequence_length,
                                             time_major=False,
                                             preprocess_collapse_repeated=False,
-                                            ctc_merge_repeated=ctc_merge_repeated)
+                                            ctc_merge_repeated=ctc_merge_repeated,
+                                            ignore_longer_outputs_than_inputs=True
+                                            )
 
             # maximum likelihood loss
             loss += negative_likelihood_y
