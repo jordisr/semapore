@@ -89,7 +89,8 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_sequence=True, u
 
     # input: (batch_size, num_columns, encoder_dim)
     # output: (batch_size, num_columns, output_dim=5)
-    dense = tf.keras.layers.Dense(5, name="DenseOutput")
+    dense1 = tf.keras.layers.Dense(encoder_dim//2, name="DenseOutput1")
+    dense2 = tf.keras.layers.Dense(5, name="DenseOutput2")
 
     # put layers together
     if use_signal:
@@ -110,7 +111,9 @@ def build_model(seq_dim=64, signal_dim=64, encoder_dim=128, use_sequence=True, u
         # draft concatenated in at the end
         draft_embedding = char_embedding(draft_input_tensor)
         x = tf.concat([x, draft_embedding], axis=2)
-    outputs = dense(x)
+    
+    x = dense1(x)
+    outputs = dense2(x)
 
     model_name = ("draft_" if use_draft else "") + ("sequence_signal" if use_signal else "sequence")
     model = tf.keras.Model(inputs=[signal_input, alignment_input, draft_input], outputs=outputs, name=model_name)

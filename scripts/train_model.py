@@ -205,7 +205,7 @@ def train_model(args):
                     csv_logger_callback]
 
         if args.early_stopping:
-            early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor=args.early_stopping, min_delta=0, patience=5, verbose=1, restore_best_weights=True)
+            early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor=args.early_stopping, min_delta=0, patience=10, verbose=1, restore_best_weights=True)
             callbacks.append(early_stopping_callback)
 
         if args.wandb:
